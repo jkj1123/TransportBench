@@ -20,6 +20,8 @@ def get_args():
     parser.add_argument('--model', type=str, required=True, 
                         choices=['deeponet', 'fno', 'unet', 'vit', 'ae', 'pt'], help='Choose model')
     parser.add_argument('--data_dir', type=str, default='./data/cavity', help='Path to .npz data')
+    parser.add_argument('--pt_path', type=str, default='./cavity_dataset.pt',
+                        help='Compact .pt dataset file to load directly (built from .npz if missing)')
     parser.add_argument('--checkpoint', type=str, default='./checkpoints/best_model_{}.pth', help='Path to weights')
     return parser.parse_args()
 
@@ -32,7 +34,7 @@ def main():
         
     print(f"📊 Starting Evaluation | Model: {args.model.upper()} | Device: {device}")
 
-    dataset = CavityDataset(data_dir=args.data_dir, mode='test', model_type='fno')
+    dataset = CavityDataset(data_dir=args.data_dir, mode='test', model_type='fno', pt_path=args.pt_path)
     train_size = int(0.8 * len(dataset))
     test_size = len(dataset) - train_size
     _, test_data = random_split(dataset, [train_size, test_size], generator=torch.Generator().manual_seed(42))

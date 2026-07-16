@@ -24,6 +24,8 @@ def get_args():
     parser.add_argument('--batch_size', type=int, default=256, help='Batch size')
     parser.add_argument('--lr', type=float, default=1e-3, help='Learning rate')
     parser.add_argument('--data_dir', type=str, default='./data/cavity', help='Directory containing .npz data')
+    parser.add_argument('--pt_path', type=str, default='./cavity_dataset.pt',
+                        help='Compact .pt dataset file to load directly (built from .npz if missing)')
     parser.add_argument('--save_dir', type=str, default='./checkpoints', help='Directory to save models')
     return parser.parse_args()
 
@@ -35,7 +37,7 @@ def main():
     os.makedirs(args.save_dir, exist_ok=True)
     save_path = os.path.join(args.save_dir, f"best_model_{args.model}.pth")
 
-    dataset = CavityDataset(data_dir=args.data_dir, mode='train', model_type='fno')
+    dataset = CavityDataset(data_dir=args.data_dir, mode='train', model_type='fno', pt_path=args.pt_path)
     
     train_size = int(0.8 * len(dataset))
     test_size = len(dataset) - train_size
