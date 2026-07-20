@@ -18,7 +18,7 @@ class PositionalEncoding(nn.Module):
         return torch.cat(out, dim=-1)
 
 class DenseNet(nn.Module):
-    def __init__(self, input_dim, output_dim, hidden_width=230, hidden_depth=5):
+    def __init__(self, input_dim, output_dim, hidden_width=2048, hidden_depth=3):
         super().__init__()
         layers =[]
         layers.append(nn.Linear(input_dim, hidden_width))
@@ -43,7 +43,7 @@ class DeepONet2d(nn.Module):
         
         # Branch Net: Physical parameter inputs
         self.branch_net = DenseNet(input_dim=3, output_dim=out_channels * basis_size, 
-                                   hidden_width=256, hidden_depth=5)
+                                   hidden_width=2048, hidden_depth=3)
         
         # Trunk Net: Coordinate inputs
         if self.use_fourier:
@@ -53,12 +53,11 @@ class DeepONet2d(nn.Module):
             trunk_in_dim = 2
             
         self.trunk_net = DenseNet(input_dim=trunk_in_dim, output_dim=basis_size, 
-                                  hidden_width=256, hidden_depth=5)
+                                  hidden_width=2048, hidden_depth=3)
         
         self.bias = nn.Parameter(torch.zeros(out_channels))
 
     def forward(self, x):
-
         B, C, H, W = x.shape
         branch_in = x[:, 2:5, 0, 0] # [B, 3]
         coords = x[0, 0:2, :, :].permute(1, 2, 0).reshape(-1, 2)

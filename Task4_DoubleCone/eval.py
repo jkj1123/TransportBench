@@ -11,11 +11,13 @@ from model_unet import FluidUNet
 from model_vit import VisionTransformer
 from model_ae import AutoEncoder2d
 from model_pt import PointTransformer
+from model_mscale_deeponet import MscaleDeepONet
+from model_hyperdeeponet import HyperDeepONet
 
 def get_args():
     parser = argparse.ArgumentParser(description="Evaluation for Task 4: Double Cone Flow")
     parser.add_argument('--model', type=str, required=True, 
-                        choices=['deeponet', 'fno', 'unet', 'vit', 'ae', 'pt'], 
+                        choices=['deeponet', 'fno', 'unet', 'vit', 'ae', 'pt', 'hyperdeeponet', 'mscale_deeponet'], 
                         help='Choose the model to evaluate')
     parser.add_argument('--no_fourier', action='store_true',
                         help='Model does not use Fourier encoding')
@@ -81,6 +83,10 @@ def main():
         model = DeepONet2d(in_channels=5, out_channels=4, basis_size=256, use_fourier=checkpoint_fourier)
     elif args.model == 'pt':
         model = PointTransformer(in_channels=5, out_channels=4, latent_dim=512, num_latents=1024, depth=10, use_fourier=checkpoint_fourier)
+    elif args.model == 'mscale_deeponet':
+        model = MscaleDeepONet(branch_dim=3, trunk_dim=2, hidden_dim=175, num_outputs=4, scales=[1, 2, 4, 8, 16], depth=4, activation='GELU')
+    elif args.model == 'hyperdeeponet': 
+        model = HyperDeepONet(branch_dim=3, trunk_dim=2, hidden_dim=77, num_outputs=4, trunk_depth=3, branch_depth=3, activation='GELU')
     
     model = model.to(device)
     model.load_state_dict(checkpoint.get('model_state', checkpoint)) 
