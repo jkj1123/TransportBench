@@ -7,6 +7,7 @@ data/
 *.pt
 *.h5
 *.mat
+*.pth
 
 __pycache__/
 *.pyc

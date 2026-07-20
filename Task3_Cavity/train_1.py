@@ -33,7 +33,8 @@ def get_args():
 
 def main():
     args = get_args()
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    #device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    device = torch.device('cuda:1')
     print(f"🚀 Starting Task III Training | Model: {args.model.upper()} | Device: {device}")
 
     os.makedirs(args.save_dir, exist_ok=True)

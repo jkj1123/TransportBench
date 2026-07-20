@@ -45,12 +45,11 @@ class HyperDeepONet(nn.Module):
 
     def _trunk_forward(self, params, x_trunk):
         """Hypernetwork trunk: params → weights/biases → forward pass."""
-        B = params.shape[0]  # use branch batch size (handles shared trunk)
         # Normalize to 3D: [B, N, trunk_dim]
         if x_trunk.dim() == 2:
-            x_trunk = x_trunk.unsqueeze(0).expand(B, -1, -1)
+            x_trunk = x_trunk.unsqueeze(0)  # [1, N, trunk_dim]
 
-        _, N, _ = x_trunk.shape
+        B, N, _ = x_trunk.shape
         y = x_trunk  # [B, N, trunk_dim]
         start = 0
 
@@ -78,8 +77,8 @@ class HyperDeepONet(nn.Module):
 
     def forward(self, x_branch, x_trunk):
 
-        print(x_branch.shape)
-        print(x_trunk.shape)
+        #print(x_branch.shape)
+        #print(x_trunk.shape)
         """
         Args:
             x_branch: [B, branch_dim]  sensor values
