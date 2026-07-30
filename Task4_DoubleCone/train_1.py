@@ -19,7 +19,7 @@ def get_args():
     parser.add_argument('--model', type=str, required=True, choices=['ae', 'deeponet', 'fno', 'pt', 'unet', 'vit','mscale_deeponet', 'hyperdeeponet'])
     parser.add_argument('--data_path', type=str, required=True)
     parser.add_argument('--batch_size', type=int, default=8)
-    parser.add_argument('--epochs', type=int, default=10000)
+    parser.add_argument('--epochs', type=int, default=100000)
     parser.add_argument('--lr', type=float, default=5e-4)
     parser.add_argument('--no_fourier', action='store_true', help='Disable Fourier Encoding')
     parser.add_argument('--save_dir', type=str, default='./checkpoints')

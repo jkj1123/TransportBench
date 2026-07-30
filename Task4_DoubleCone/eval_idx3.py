@@ -84,9 +84,9 @@ def main():
     elif args.model == 'pt':
         model = PointTransformer(in_channels=5, out_channels=4, latent_dim=512, num_latents=1024, depth=10, use_fourier=checkpoint_fourier)
     elif args.model == 'mscale_deeponet':
-        model = MscaleDeepONet(branch_dim=3, trunk_dim=2, hidden_dim=175, num_outputs=4, scales=[1, 2, 4, 8, 16], depth=4, activation='GELU')
+        model = MscaleDeepONet(branch_dim=3, trunk_dim=2, hidden_dim=195, num_outputs=4, scales=[1, 2, 4, 8, 16], depth=4, activation='GELU')
     elif args.model == 'hyperdeeponet': 
-        model = HyperDeepONet(branch_dim=3, trunk_dim=2, hidden_dim=77, num_outputs=4, trunk_depth=3, branch_depth=3, activation='GELU')
+        model = HyperDeepONet(branch_dim=3, trunk_dim=2, hidden_dim=78, num_outputs=4, trunk_depth=3, branch_depth=3, activation='GELU')
     
     model = model.to(device)
     model.load_state_dict(checkpoint.get('model_state', checkpoint))
@@ -103,33 +103,50 @@ def main():
     g_cpu = torch.Generator(); g_cpu.manual_seed(42)
     test_idx = torch.randperm(n_total, generator=g_cpu)[n_train:].tolist()
 
-    # Computed like the README "Pressure Field Rel L2": PHYSICAL space,
-    # pressure decoded back from log10 via pow10. The 'p' channel is the README metric.
+    # Three metrics on the test set:
+    #  (1) encoded-space L1  -> EXACTLY train.py's "Test(Pure)" (sanity check, should match ~0.2)
+    #  (2) paper Eq.(17) Relative L2 -> physical space, ALL variables aggregated (mask=1: no mask ch here)
+    #  (3) physical-space Rel L2 per channel -> repo README "Pressure Field Rel L2" is the 'p' value
     ch_names = ['rho', 'u', 'v', 'p']
     rel_l2 = torch.zeros(len(ch_names))
+    l1_enc = 0.0
+    rel_l2_paper = 0.0
     with torch.no_grad():
         for i in test_idx:
             xin = x_data[i].unsqueeze(0).to(device)
-            gt = y_data[i].unsqueeze(0).to(device)                  # physical GT (pressure in Pa)
-            pred_log = y_norm.decode(model(x_norm.encode(xin)))
-            pred = pred_log.clone()
-            pred[:, 3, :, :] = torch.pow(10, pred_log[:, 3, :, :])   # log10 -> physical pressure
+            pred_enc = model(x_norm.encode(xin))                          # encoded prediction
+            gt_enc = y_norm.encode(y_data_log[i].unsqueeze(0).to(device)) # encoded target
+            l1_enc += torch.abs(pred_enc - gt_enc).mean().item()          # == train.py Test(Pure)
+
+            gt = y_data[i].unsqueeze(0).to(device)                        # physical GT (pressure in Pa)
+            pred = y_norm.decode(pred_enc).clone()
+            pred[:, 3, :, :] = torch.pow(10, pred[:, 3, :, :])            # log10 -> physical pressure
+            # paper Eq.(17): sqrt(sum||err||^2) / sqrt(sum||ref||^2) over ALL variables + ALL grid points
+            err_all = (pred[0] - gt[0]).reshape(-1)
+            ref_all = gt[0].reshape(-1)
+            rel_l2_paper += (torch.linalg.norm(err_all) / (torch.linalg.norm(ref_all) + 1e-8)).item()
             for c in range(len(ch_names)):
                 num = torch.linalg.norm(pred[0, c] - gt[0, c])
                 den = torch.linalg.norm(gt[0, c]) + 1e-8
                 rel_l2[c] += (num / den).item()
     rel_l2 /= len(test_idx)
+    l1_enc /= len(test_idx)
+    rel_l2_paper /= len(test_idx)
 
-    print(f"\n===== Test-set Relative L2 Error (physical space, {len(test_idx)} samples, idx={sorted(test_idx)}) =====")
+    print(f"\n===== Test-set metrics ({len(test_idx)} samples, idx={sorted(test_idx)}) =====")
+    print(f"  [train.py metric] encoded L1 (Test-Pure)                       : {l1_enc:.5f}")
+    print(f"  [paper Eq.17]     physical Relative L2 (all-variable aggregate) : {rel_l2_paper:.5f}")
+    print(f"  [per-channel]     physical-space Relative L2 per channel:")
     for c, name in enumerate(ch_names):
-        tag = "   <-- README Pressure Field Rel L2" if name == 'p' else ""
-        print(f"  {name:>3s}: {rel_l2[c].item():.4%}{tag}")
-    print(f"  per-channel mean: {rel_l2.mean().item():.4%}\n")
+        tag = "   <-- repo README Pressure Rel L2" if name == 'p' else ""
+        print(f"      {name:>3s}: {rel_l2[c].item():.4%}{tag}")
+    print(f"      per-channel mean: {rel_l2.mean().item():.4%}\n")
     # ===== end test-set evaluation =====
 
-    # Extract benchmark sample
-    actual_idx = args.sample_idx
-    print(f"🎯 Successfully extracted Benchmark Case (Global Idx {actual_idx}).")
+    # Extract benchmark sample: highest-temperature case within the TEST set
+    test_temps = x_data[test_idx, 3, 0, 0]  # channel 3 = Temperature (normalized, monotonic w/ physical)
+    actual_idx = int(test_idx[int(torch.argmax(test_temps))])
+    print(f"🎯 Selected highest-temperature TEST case (Global Idx {actual_idx}).")
 
     x_input = x_data[actual_idx].unsqueeze(0).to(device)
     y_true_phys = y_data[actual_idx].unsqueeze(0).to(device)

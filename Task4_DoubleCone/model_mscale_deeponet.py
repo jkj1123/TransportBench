@@ -130,6 +130,7 @@ class MscaleDeepONet(nn.Module):
 
         pred = torch.einsum("bkh, bnh -> bnk", b_out, t)    # [B, N, num_outputs]
 
+        pred = pred.permute(0,2,1)
         pred = pred.reshape(B,self.num_outputs,H,W)
 
         return pred

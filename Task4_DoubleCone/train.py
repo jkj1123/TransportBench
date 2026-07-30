@@ -19,7 +19,7 @@ def get_args():
     parser.add_argument('--model', type=str, required=True, choices=['ae', 'deeponet', 'fno', 'pt', 'unet', 'vit','mscale_deeponet', 'hyperdeeponet'])
     parser.add_argument('--data_path', type=str, required=True)
     parser.add_argument('--batch_size', type=int, default=8)
-    parser.add_argument('--epochs', type=int, default=10000)
+    parser.add_argument('--epochs', type=int, default=100000)
     parser.add_argument('--lr', type=float, default=5e-4)
     parser.add_argument('--no_fourier', action='store_true', help='Disable Fourier Encoding')
     parser.add_argument('--save_dir', type=str, default='./checkpoints')
@@ -130,7 +130,7 @@ def main():
         test_loss_val /= len(test_loader)
 
         if ep % 50 == 0 or ep == args.epochs - 1:
-            log(f"Ep {ep:04d} | LR: {scheduler.get_last_lr()[0]:.1e} | Train: {train_loss_val:.5f} | Test(Pure): {test_loss_val:.5f} | W_wall: {w_wall:.1f}")
+            log(f"Ep {ep:08d} | LR: {scheduler.get_last_lr()[0]:.1e} | Train: {train_loss_val:.5f} | Test(Pure): {test_loss_val:.5f} | W_wall: {w_wall:.1f}")
 
         # Save best model after epoch 1000 to prevent early overfitting
         if ep >= 1000 and test_loss_val < best_test_loss:
