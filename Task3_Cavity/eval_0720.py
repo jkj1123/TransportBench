@@ -53,14 +53,14 @@ def main():
     elif args.model == 'ae':
         model = AutoEncoder(in_channels=3, out_channels=10, base_dim=32)
     elif args.model == 'deeponet':
-        model = BoltzmannDeepONet(branch_dim=1, trunk_dim=2, hidden_dim=256, num_outputs=10, depth=5)
+        model = BoltzmannDeepONet(branch_dim=1, trunk_dim=2, hidden_dim=230, num_outputs=10, depth=5)
     elif args.model == 'pt':
         model = PointTransformer(in_channels=3, out_channels=10, embed_dim=120, depth=4)
     elif args.model == 'mscale_deeponet':
-        model = MscaleDeepONet(branch_dim=1, trunk_dim=2, hidden_dim=181, num_outputs=10,
+        model = MscaleDeepONet(branch_dim=1, trunk_dim=2, hidden_dim=175, num_outputs=10,
                                scales=[1, 2, 4, 8, 16], depth=4, activation='GELU')
     elif args.model == 'hyperdeeponet':
-        model = HyperDeepONet(branch_dim=1, trunk_dim=2, hidden_dim=76, num_outputs=10,
+        model = HyperDeepONet(branch_dim=1, trunk_dim=2, hidden_dim=77, num_outputs=10,
                               trunk_depth=3, branch_depth=3, activation='GELU')
 
     model = model.to(device)
@@ -162,7 +162,8 @@ def main():
         axes[1].set_aspect("equal")
 
         # Absolute error
-        err_max = Z_error.max()
+        err_max = 0.005*Z_true.max()
+        #err_max = 0.0001
         err_levels = np.linspace(0, err_max if err_max > 0 else 1e-8, 51)
         contour2 = axes[2].contourf(X, Y, Z_error, levels=err_levels, cmap="jet")
         fig.colorbar(contour2, ax=axes[2], label="absolute error")

@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 import numpy as np
 import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader, random_split
 
@@ -15,12 +16,13 @@ from model_ae import AutoEncoder
 from model_pt import PointTransformer
 from model_mscale_deeponet import MscaleDeepONet
 from model_hyperdeeponet import HyperDeepONet
+from model_c_hyperdeeponet import c_HyperDeepONet
 from data_loader import CavityDataset
 
 def get_args():
     parser = argparse.ArgumentParser(description="Evaluation Script for Task III: Cavity Flow")
-    parser.add_argument('--model', type=str, required=True, 
-                        choices=['deeponet', 'fno', 'unet', 'vit', 'ae', 'pt','mscale_deeponet', 'hyperdeeponet'], help='Choose model')
+    parser.add_argument('--model', type=str, required=True,
+                        choices=['deeponet', 'fno', 'unet', 'vit', 'ae', 'pt','mscale_deeponet', 'hyperdeeponet', 'c_hyperdeeponet'], help='Choose model')
     parser.add_argument('--data_dir', type=str, default='./data/cavity', help='Path to .npz data')
     parser.add_argument('--pt_path', type=str, default='./cavity_dataset.pt',
                         help='Compact .pt dataset file to load directly (built from .npz if missing)')
@@ -28,13 +30,13 @@ def get_args():
     return parser.parse_args()
 
 def main():
-    
+
     args = get_args()
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    
+
     # Prevent OOM for Point Transformer
     if args.model == 'pt': device = 'cpu'
-        
+
     print(f"📊 Starting Evaluation | Model: {args.model.upper()} | Device: {device}")
 
     dataset = CavityDataset(data_dir=args.data_dir, mode='test', model_type='fno', pt_path=args.pt_path)
@@ -56,27 +58,30 @@ def main():
     elif args.model == 'pt':
         model = PointTransformer(in_channels=3, out_channels=10, embed_dim=120, depth=4)
     elif args.model == 'mscale_deeponet':
-        model = MscaleDeepONet(branch_dim=1, trunk_dim=2, hidden_dim=181, num_outputs=10,
+        model = MscaleDeepONet(branch_dim=1, trunk_dim=2, hidden_dim=175, num_outputs=10,
                                scales=[1, 2, 4, 8, 16], depth=4, activation='GELU')
     elif args.model == 'hyperdeeponet':
-        model = HyperDeepONet(branch_dim=1, trunk_dim=2, hidden_dim=76, num_outputs=10,
+        model = HyperDeepONet(branch_dim=1, trunk_dim=2, hidden_dim=77, num_outputs=10,
                               trunk_depth=3, branch_depth=3, activation='GELU')
-    
+    elif args.model == 'c_hyperdeeponet':
+        model = model = c_HyperDeepONet(branch_dim=1, trunk_dim=2, hidden_dim=77, num_outputs=10,
+                                        trunk_depth=3, branch_depth=3, activation='GELU',num_chunk=2)
+
     model = model.to(device)
-    
+
     ckpt_path = args.checkpoint.format(args.model)
     model.load_state_dict(torch.load(ckpt_path, map_location=device))
     model.eval()
 
     total_mae, total_l2_error = 0.0, 0.0
     criterion_mae = nn.L1Loss(reduction='sum')
-    
+
     plot_gt, plot_pred = None, None
 
     with torch.no_grad():
         for i, (x, y) in enumerate(test_loader):
             x, y = x.to(device), y.to(device)
-            
+
             if args.model in['unet', 'vit']:
                 x_in = x.permute(0, 3, 1, 2)
                 pred = model(x_in)
@@ -86,7 +91,7 @@ def main():
                 x_branch = x[:, 0, 0, 0:1]
                 x_trunk = x[0, :, :, 1:3].reshape(-1, 2)
                 pred = model(x_branch, x_trunk).view(B, 50, 50, 10)
-            elif args.model in ['hyperdeeponet']:
+            elif args.model in ['hyperdeeponet', 'c_hyperdeeponet']:
                 B = x.shape[0]
                 x_branch = x[:, 0, 0, 0:1]
                 x0 = x[:, :, :, 1:3]
@@ -104,12 +109,16 @@ def main():
             if i == 0:
                 mean = torch.tensor(dataset.target_mean, device=device).view(1, 1, 1, 10)
                 std = torch.tensor(dataset.target_std, device=device).view(1, 1, 1, 10)
-                
+
                 pred_real = pred * std + mean
                 target_real = y * std + mean
-                
+
                 plot_pred = pred_real[0].cpu().numpy()
                 plot_gt = target_real[0].cpu().numpy()
+
+                # Grid coordinates of the plotted sample (input ch1=x, ch2=y)
+                plot_X = x[0, :, :, 1].cpu().numpy()
+                plot_Y = x[0, :, :, 2].cpu().numpy()
 
     num_elements = len(test_loader.dataset) * np.prod(y.shape[1:])
     final_mae = total_mae / num_elements
@@ -118,45 +127,61 @@ def main():
     print("-" * 50)
     print(f"🏆 Results for {args.model.upper()}: MAE = {final_mae:.5f} | Rel L2 = {final_rel_l2*100:.2f}%")
 
-    nx, ny = dataset.nx, dataset.ny
-    vx = np.linspace(0, 1, nx)
-    vy = np.linspace(0, 1, ny)
-    
-    # Extract u, v and calculate velocity magnitude
-    rho_t, u_t, v_t = plot_gt[..., 0], plot_gt[..., 1]/(plot_gt[..., 0]+1e-8), plot_gt[..., 2]/(plot_gt[..., 0]+1e-8)
-    rho_p, u_p, v_p = plot_pred[..., 0], plot_pred[..., 1]/(plot_pred[..., 0]+1e-8), plot_pred[..., 2]/(plot_pred[..., 0]+1e-8)
-    mag_t = np.sqrt(u_t**2 + v_t**2)
-    mag_p = np.sqrt(u_p**2 + v_p**2)
+    # ==================== PLOTTING (Ground Truth | Prediction | Absolute Error) ====================
+    # Target channel layout: [w(0-3), P_flat(4-7), q(8-9)]  ->  P0 = index 4, q0 = index 8
+    X, Y = plot_X, plot_Y
+    channels = [('P0', 4), ('q0', 8)]
 
-    fig = plt.figure(figsize=(12, 10))
-    
-    ax1 = plt.subplot(2, 2, 1)
-    ax1.set_title("Ground Truth (Full)", fontsize=14, fontweight='bold')
-    ax1.imshow(mag_t.T, origin='lower', extent=[0,1,0,1], cmap='jet', vmin=0, vmax=0.15)
-    ax1.streamplot(vx, vy, u_t.T, v_t.T, color='white', density=1.5, linewidth=0.8, arrowsize=0.8)
-    
-    ax2 = plt.subplot(2, 2, 2)
-    ax2.set_title(f"{args.model.upper()} Prediction (Full)", fontsize=14, fontweight='bold')
-    ax2.imshow(mag_p.T, origin='lower', extent=[0,1,0,1], cmap='jet', vmin=0, vmax=0.15)
-    ax2.streamplot(vx, vy, u_p.T, v_p.T, color='white', density=1.5, linewidth=0.8, arrowsize=0.8)
-    
-    zoom_lim =[0.0, 0.4]
-    ax3 = plt.subplot(2, 2, 3)
-    ax3.set_title("Ground Truth (Corner Zoom)", fontsize=14, fontweight='bold')
-    ax3.imshow(mag_t.T, origin='lower', extent=[0,1,0,1], cmap='jet', vmin=0, vmax=0.02)
-    ax3.streamplot(vx, vy, u_t.T, v_t.T, color='white', density=3.0, linewidth=1.0)
-    ax3.set_xlim(zoom_lim); ax3.set_ylim(zoom_lim)
-    
-    ax4 = plt.subplot(2, 2, 4)
-    ax4.set_title(f"{args.model.upper()} Prediction (Corner Zoom)", fontsize=14, fontweight='bold')
-    ax4.imshow(mag_p.T, origin='lower', extent=[0,1,0,1], cmap='jet', vmin=0, vmax=0.02)
-    ax4.streamplot(vx, vy, u_p.T, v_p.T, color='white', density=3.0, linewidth=1.0)
-    ax4.set_xlim(zoom_lim); ax4.set_ylim(zoom_lim)
-    
-    plt.tight_layout()
-    save_fig_path = f"evaluation_cavity_{args.model}.png"
-    plt.savefig(save_fig_path, dpi=300)
-    print(f"📸 plot saved as: {save_fig_path}")
+    for name, idx in channels:
+        Z_true = plot_gt[..., idx]    # (nx, ny)
+        Z_pred = plot_pred[..., idx]  # (nx, ny)
+        Z_error = np.abs(Z_pred - Z_true)  # absolute error
+
+        # Ground truth & prediction share one color scale.
+        # NOTE: pass an explicit `levels` array (not an int) so both panels use the
+        # SAME contour boundaries -> identical colorbars. Passing vmin/vmax with an
+        # integer level count does NOT fix the colorbar, since contourf picks levels
+        # from each array's own min/max.
+        vmin = min(Z_true.min(), Z_pred.min())
+        vmax = max(Z_true.max(), Z_pred.max())
+        levels = np.linspace(vmin, vmax, 51)
+
+        # Relative L2 error for this channel (||true - pred|| / ||true||)
+        err = np.linalg.norm(Z_true - Z_pred) / (np.linalg.norm(Z_true) + 1e-8)
+
+        fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+
+        # Ground truth
+        contour0 = axes[0].contourf(X, Y, Z_true, levels=levels, cmap="jet")
+        fig.colorbar(contour0, ax=axes[0], label="value")
+        axes[0].set_title(f"Ground Truth: {name}")
+        axes[0].set_xlabel("x"); axes[0].set_ylabel("y")
+        axes[0].set_aspect("equal")
+
+        # Prediction
+        contour1 = axes[1].contourf(X, Y, Z_pred, levels=levels, cmap="jet")
+        fig.colorbar(contour1, ax=axes[1], label="value")
+        axes[1].set_title(f"{args.model.upper()} Prediction: {name}")
+        axes[1].set_xlabel("x"); axes[1].set_ylabel("y")
+        axes[1].set_aspect("equal")
+
+        # Absolute error
+        err_max = 0.005*Z_true.max()
+        #err_max = 0.0001
+        err_levels = np.linspace(0, err_max if err_max > 0 else 1e-8, 51)
+        contour2 = axes[2].contourf(X, Y, Z_error, levels=err_levels, cmap="jet")
+        fig.colorbar(contour2, ax=axes[2], label="absolute error")
+        axes[2].set_title("Absolute Error")
+        axes[2].set_xlabel("x"); axes[2].set_ylabel("y")
+        axes[2].set_aspect("equal")
+
+        fig.suptitle(f"{args.model.upper()} | Channel {name} | Rel. L2 error = {err*100:.2f}%",
+                     fontsize=14, fontweight='bold')
+        plt.tight_layout()
+        save_fig_path = f"evaluation_cavity_{args.model}_{name}_0727.png"
+        plt.savefig(save_fig_path, dpi=300)
+        plt.close(fig)
+        print(f"📸 [{name}] plot saved as: {save_fig_path} | Rel. L2 error = {err*100:.2f}%")
 
 if __name__ == "__main__":
     main()

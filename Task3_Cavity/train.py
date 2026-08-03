@@ -15,12 +15,13 @@ from model_ae import AutoEncoder
 from model_pt import PointTransformer
 from model_mscale_deeponet import MscaleDeepONet
 from model_hyperdeeponet import HyperDeepONet
+from model_c_hyperdeeponet import c_HyperDeepONet
 from data_loader import CavityDataset
 
 def get_args():
     parser = argparse.ArgumentParser(description="TransportBench - Task III: Cavity Flow")
     parser.add_argument('--model', type=str, required=True, 
-                        choices=['deeponet', 'fno', 'unet', 'vit', 'ae', 'pt', 'mscale_deeponet', 'hyperdeeponet'], 
+                        choices=['deeponet', 'fno', 'unet', 'vit', 'ae', 'pt', 'mscale_deeponet', 'hyperdeeponet', 'c_hyperdeeponet'], 
                         help='Choose the baseline model')
     parser.add_argument('--epochs', type=int, default=100000, help='Number of training epochs')
     parser.add_argument('--batch_size', type=int, default=256, help='Batch size')
@@ -66,6 +67,9 @@ def main():
     elif args.model == 'hyperdeeponet':
         model = HyperDeepONet(branch_dim=1, trunk_dim=2, hidden_dim=77, num_outputs=10,
                               trunk_depth=3, branch_depth=3, activation='GELU')
+    elif args.model == 'c_hyperdeeponet':
+            model = c_HyperDeepONet(branch_dim=1, trunk_dim=2, hidden_dim=77, num_outputs=10,
+                                  trunk_depth=3, branch_depth=3, activation='GELU',num_chunk=2)
     
     model = model.to(device)
     print(f"🧠 Model Parameters: {sum(p.numel() for p in model.parameters()) / 1e6:.2f} M")
@@ -100,7 +104,7 @@ def main():
                 x_trunk = x[0, :, :, 1:3].reshape(-1, 2)
                 y = y.view(B, 2500, 10) 
                 pred = model(x_branch, x_trunk)
-            elif args.model in ['hyperdeeponet']:
+            elif args.model in ['hyperdeeponet', 'c_hyperdeeponet']:
                 B = x.shape[0]
                 x_branch = x[:, 0, 0, 0:1]
                 x0 = x[:, :, :, 1:3]
@@ -135,12 +139,12 @@ def main():
                     x_trunk = x[0, :, :, 1:3].reshape(-1, 2)
                     y = y.view(B, 2500, 10)
                     pred = model(x_branch, x_trunk)
-                elif args.model in ['hyperdeeponet']:
+                elif args.model in ['hyperdeeponet', 'c_hyperdeeponet']:
                     B = x.shape[0]
                     x_branch = x[:, 0, 0, 0:1]
                     x0 = x[:, :, :, 1:3]
                     x_trunk = x0.reshape(x0.shape[0], -1, x0.shape[-1])
-                    y = y.view(B, 2500, 10) 
+                    y = y.view(B, 2500, 10)
                     pred = model(x_branch, x_trunk)
                 else:
                     pred = model(x)

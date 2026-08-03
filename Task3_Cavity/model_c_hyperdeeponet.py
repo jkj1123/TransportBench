@@ -8,12 +8,13 @@ Key ideas from Lee & Shin:
 
 import torch
 import torch.nn as nn
+import math
 
 
-class HyperDeepONet(nn.Module):
+class c_HyperDeepONet(nn.Module):
     def __init__(self, branch_dim=674, trunk_dim=2, hidden_dim=46,
                  num_outputs=4, trunk_depth=3, branch_depth=3,
-                 activation='GELU'):
+                 activation='GELU',num_chunk = 1):
         super().__init__()
 
         if activation == 'Tanh':
@@ -33,11 +34,15 @@ class HyperDeepONet(nn.Module):
         for i in range(len(self.trunk_dims) - 1):
             t_para += self.trunk_dims[i] * self.trunk_dims[i + 1] + self.trunk_dims[i + 1]
 
-        # Branch: single network → t_para (trunk weights/biases)
-        branch_dims = [branch_dim] + [hidden_dim] * branch_depth + [t_para]
-        self.branch_net = _MLP(branch_dims, act)
 
-        self.num_outputs = num_outputs
+        ## defining number of chunks and number of sensors
+        self.param_size = t_para
+        self.num_chunks = num_chunk
+        self.num_sensor = math.ceil(t_para / self.num_chunks)
+
+        # Branch: single network → t_para (trunk weights/biases)
+        branch_dims = [branch_dim + 1] + [hidden_dim] * branch_depth + [self.num_sensor]
+        self.branch_net = _MLP(branch_dims, act)
 
     def _branch_forward(self, x):
         """Run branch net on x → trunk parameters."""
@@ -86,7 +91,29 @@ class HyperDeepONet(nn.Module):
             [B, N, num_outputs]
         """
 
-        params = self._branch_forward(x_branch)  # [B, t_para]
+        B,D = x_branch.shape[0], x_branch.shape[1]
+
+        param_size = self.param_size
+        num_chunk = self.num_chunks
+        num_sensor = self.num_sensor
+
+        params = x_branch.new_empty(B, num_chunk, num_sensor).uniform_(0, 1)
+        
+        x_branch = x_branch.unsqueeze(1).repeat(1, num_chunk, 1)
+        new_col = x_branch.new_zeros(B, num_chunk, 1)
+
+        
+        for i in range(num_chunk):
+            new_col[:,i,0] = i/num_chunk
+        
+        x_branch = torch.cat([x_branch, new_col], dim=2)
+        
+        for i in range(num_chunk):
+            params[:,:,:] =  self._branch_forward(x_branch[:,:,:])
+        
+        params = params.reshape(B,num_chunk*num_sensor)
+        params = params[:, :param_size]
+
         return self._trunk_forward(params, x_trunk)
 
 

@@ -22,7 +22,7 @@ def get_args():
     parser.add_argument('--model', type=str, required=True, 
                         choices=['deeponet', 'fno', 'unet', 'vit', 'ae', 'pt', 'mscale_deeponet', 'hyperdeeponet'], 
                         help='Choose the baseline model')
-    parser.add_argument('--epochs', type=int, default=100000, help='Number of training epochs')
+    parser.add_argument('--epochs', type=int, default=2500, help='Number of training epochs')
     parser.add_argument('--batch_size', type=int, default=256, help='Batch size')
     parser.add_argument('--lr', type=float, default=1e-3, help='Learning rate')
     parser.add_argument('--data_dir', type=str, default='./data/cavity', help='Directory containing .npz data')
