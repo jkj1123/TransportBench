@@ -5,7 +5,7 @@ class sin_act(nn.Module):
     def forward(self, x):
         return torch.sin(x)
 
-class BoltzmannDeepONet(nn.Module):
+class Fusion_DeepONet(nn.Module):
     def __init__(self, branch_dim=1, trunk_dim=2, hidden_dim=280, num_outputs=10, depth=5, activation='GELU'):
         """
         DeepONet for Cavity Task (Square Domain)
@@ -27,48 +27,68 @@ class BoltzmannDeepONet(nn.Module):
         self.act2 = sin_act()
 
         #Fusion-deeponet additional parameters
-        self.ab  = nn.Parameter(torch.full((4,),0.1))
-        self.cb  = nn.Parameter(torch.full((4,),0.1))
-        self.a1b = nn.Parameter(torch.zeros(4,))
-        self.F1b = nn.Parameter(torch.full((4,),0.1))
-        self.c1b = nn.Parameter(torch.zeros(4,))
+        self.L = depth + 1
 
-        self.at  = nn.Parameter(torch.full((4,),0.1))
-        self.ct  = nn.Parameter(torch.full((4,),0.1))
-        self.a1t = nn.Parameter(torch.zeros(4,))
-        self.F1t = nn.Parameter(torch.full((4,),0.1))
-        self.c1t = nn.Parameter(torch.zeros(4,))
+        self.ab  = nn.Parameter(torch.full((self.L,),0.1))
+        self.cb  = nn.Parameter(torch.full((self.L,),0.1))
+        self.a1b = nn.Parameter(torch.zeros(self.L,))
+        self.F1b = nn.Parameter(torch.full((self.L,),0.1))
+        self.c1b = nn.Parameter(torch.zeros(self.L,))
+
+        self.at  = nn.Parameter(torch.full((self.L,),0.1))
+        self.ct  = nn.Parameter(torch.full((self.L,),0.1))
+        self.a1t = nn.Parameter(torch.zeros(self.L,))
+        self.F1t = nn.Parameter(torch.full((self.L,),0.1))
+        self.c1t = nn.Parameter(torch.zeros(self.L,))
 
         # Branch Net
-        branch_layers = []
-        branch_layers.extend([nn.Linear(branch_dim, hidden_dim), self.act])
+        self.branch_net = nn.ModuleList()
+        self.branch_net.append(nn.Linear(branch_dim, hidden_dim))
         for _ in range(depth - 1):
-            branch_layers.extend([nn.Linear(hidden_dim, hidden_dim), self.act])
-        branch_layers.append(nn.Linear(hidden_dim, hidden_dim * num_outputs))
-        self.branch_net = nn.Sequential(*branch_layers)
+            self.branch_net.append(nn.Linear(hidden_dim, hidden_dim))
+        self.branch_net.append(nn.Linear(hidden_dim, hidden_dim * num_outputs))
 
-        # Trunk Net
-        trunk_layers = []
-        trunk_layers.extend([nn.Linear(trunk_dim, hidden_dim), self.act])
+        # Trunk Net: [Linear1, Linear2, ..., Last Linear]
+        self.trunk_net = nn.ModuleList()
+        self.trunk_net.append(nn.Linear(trunk_dim, hidden_dim))
         for _ in range(depth - 1):
-            trunk_layers.extend([nn.Linear(hidden_dim, hidden_dim), self.act])
-        trunk_layers.extend([nn.Linear(hidden_dim, hidden_dim), self.act])
-        self.trunk_net = nn.Sequential(*trunk_layers)
+            self.trunk_net.append(nn.Linear(hidden_dim, hidden_dim))
+        self.trunk_net.append(nn.Linear(hidden_dim, hidden_dim))
         
         self.num_outputs = num_outputs
         self.hidden_dim = hidden_dim
 
     def forward(self, x_branch, x_trunk):
 
-        B_out = self.branch_net(x_branch)
+        if x_trunk.dim() == 2:
+            # [N, trunk_dim] -> [1, N, trunk_dim] -> [B, N, trunk_dim]
+            x_trunk = x_trunk.unsqueeze(0).repeat(x_branch.shape[0], 1, 1)
+
+        skip = []
         
-        T_out = self.trunk_net(x_trunk)
-        
-        B_out_reshaped = B_out.view(-1, self.num_outputs, self.hidden_dim)
-        
-        # Dot product fusion
-        prediction = torch.einsum("bkh, nh -> bkn", B_out_reshaped, T_out)
-        
-        prediction = prediction.permute(0, 2, 1)
-        
+        skip = []
+
+        for i in range(self.L-1):
+
+            x_branch = self.act(10*self.ab[i]*self.branch_net[i](x_branch)+self.cb[i])+\
+            10*self.a1b[i]*self.act2(10*self.F1b[i]*self.branch_net[i](x_branch)+self.c1b[i])
+            skip.append(x_branch)
+
+        for i in range(1,self.L-1):    
+            skip[i] = skip[i-1]+skip[i]
+            
+        for i in range(self.L-1):
+
+            x_trunk = self.act(10*self.at[i]*self.trunk_net[i](x_trunk)+self.ct[i])+\
+            10*self.a1t[i]*self.act2(10*self.F1t[i]*self.trunk_net[i](x_trunk)+self.c1t[i])
+
+            x_trunk = torch.einsum('bk,bik->bik', skip[i], x_trunk)
+
+        x_branch = self.branch_net[-1](x_branch)
+        x_trunk = self.trunk_net[-1](x_trunk)
+
+        B_out_reshaped = x_branch.view(-1, self.num_outputs, self.hidden_dim)
+
+        prediction = torch.einsum("bnk, bik -> bin", B_out_reshaped, x_trunk)
+
         return prediction

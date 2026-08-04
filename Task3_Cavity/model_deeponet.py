@@ -50,5 +50,6 @@ class BoltzmannDeepONet(nn.Module):
         prediction = torch.einsum("bkh, nh -> bkn", B_out_reshaped, T_out)
         
         prediction = prediction.permute(0, 2, 1)
+
         
         return prediction
