@@ -101,11 +101,12 @@ class MscaleDeepONet(nn.Module):
         self.hidden_dim = hidden_dim
 
     def forward(self, x_branch, x_trunk):
+
         """Forward pass.
 
         Args:
             x_branch: [Batch, branch_dim]
-            x_trunk:  [N_points, trunk_dim] or [Batch, N_points, trunk_dim]
+            x_trunk:  [N_points, trunk_dim]
 
         Returns:
             [Batch, N_points, num_outputs]
@@ -124,4 +125,5 @@ class MscaleDeepONet(nn.Module):
         b_out = b_out.view(B, self.num_outputs, self.hidden_dim)  # [B, num_outputs, hidden]
 
         pred = torch.einsum("bkh, bnh -> bnk", b_out, t)    # [B, N, num_outputs]
+
         return pred

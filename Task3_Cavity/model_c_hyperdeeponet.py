@@ -85,7 +85,7 @@ class c_HyperDeepONet(nn.Module):
         """
         Args:
             x_branch: [B, branch_dim]  sensor values
-            x_trunk:  [N, trunk_dim] or [B, N, trunk_dim]  query coordinates
+            x_trunk:  [B, N, trunk_dim]  query coordinates
 
         Returns:
             [B, N, num_outputs]
@@ -97,22 +97,21 @@ class c_HyperDeepONet(nn.Module):
         num_chunk = self.num_chunks
         num_sensor = self.num_sensor
 
-        params = x_branch.new_empty(B, num_chunk, num_sensor).uniform_(0, 1)
+        params = x_branch.new_empty(B, num_chunk, num_sensor).uniform_(0, 1)    # [B, num_chunk, num_sensor]
         
-        x_branch = x_branch.unsqueeze(1).repeat(1, num_chunk, 1)
-        new_col = x_branch.new_zeros(B, num_chunk, 1)
+        x_branch = x_branch.unsqueeze(1).repeat(1, num_chunk, 1)    # [B, branch_dim] -> [B, 1, branch_dim] -> [B, num_chunk, branch_dim]
+        new_col = x_branch.new_zeros(B, num_chunk, 1)   # [B, num_chunk, 1]
 
         
         for i in range(num_chunk):
             new_col[:,i,0] = i/num_chunk
         
-        x_branch = torch.cat([x_branch, new_col], dim=2)
+        x_branch = torch.cat([x_branch, new_col], dim=2)     # [B, num_chunk, branch_dim + 1]
         
-        for i in range(num_chunk):
-            params[:,:,:] =  self._branch_forward(x_branch[:,:,:])
+        params =  self._branch_forward(x_branch)    # [B, num_chunk, num_sensor]
         
-        params = params.reshape(B,num_chunk*num_sensor)
-        params = params[:, :param_size]
+        params = params.reshape(B,num_chunk*num_sensor)     # [B, num_chunk * num_sensor]
+        params = params[:, :param_size]                     # [B, param_size]
 
         return self._trunk_forward(params, x_trunk)
 

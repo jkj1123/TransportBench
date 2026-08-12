@@ -13,10 +13,15 @@ from model_unet import FluidUNet
 from model_vit import VisionTransformer
 from model_mscale_deeponet import MscaleDeepONet
 from model_hyperdeeponet import HyperDeepONet
+from model_c_hyperdeeponet import c_HyperDeepONet
+from model_fusion_deeponet import Fusion_DeepONet
+from model_hyper_mscale_deeponet import HyperMscaleDeepONet
 
 def get_args():
     parser = argparse.ArgumentParser(description="Universal Golden Protocol Training Script")
-    parser.add_argument('--model', type=str, required=True, choices=['ae', 'deeponet', 'fno', 'pt', 'unet', 'vit','mscale_deeponet', 'hyperdeeponet'])
+    parser.add_argument('--model', type=str, required=True,
+                        choices=['ae', 'deeponet', 'fno', 'pt', 'unet', 'vit', 'mscale_deeponet', 'hyperdeeponet',
+                                 'c_hyperdeeponet', 'fusion_deeponet', 'hyper_mscale_deeponet'])
     parser.add_argument('--data_path', type=str, required=True)
     parser.add_argument('--batch_size', type=int, default=8)
     parser.add_argument('--epochs', type=int, default=100000)
@@ -36,6 +41,12 @@ def build_model(model_name, use_fourier):
                                                                 scales=[1, 2, 4, 8, 16], depth=4, activation='GELU')
     elif model_name == 'hyperdeeponet': return HyperDeepONet(branch_dim=3, trunk_dim=2, hidden_dim=78, num_outputs=4,
                                                           trunk_depth=3, branch_depth=3, activation='GELU')
+    elif model_name == 'c_hyperdeeponet': return c_HyperDeepONet(branch_dim=3, trunk_dim=2, hidden_dim=77, num_outputs=4,
+                                                              trunk_depth=3, branch_depth=3, activation='GELU', num_chunk=2)
+    elif model_name == 'fusion_deeponet': return Fusion_DeepONet(branch_dim=3, trunk_dim=2, hidden_dim=77, num_outputs=4,
+                                                              depth=5, activation='Tanh')
+    elif model_name == 'hyper_mscale_deeponet': return HyperMscaleDeepONet(branch_dim=3, trunk_dim=2, hidden_dim=68, num_outputs=4,
+                                                                        depth=4, activation='GELU')
 
 def main():
     args = get_args()

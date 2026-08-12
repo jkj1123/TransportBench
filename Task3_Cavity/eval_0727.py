@@ -17,12 +17,15 @@ from model_pt import PointTransformer
 from model_mscale_deeponet import MscaleDeepONet
 from model_hyperdeeponet import HyperDeepONet
 from model_c_hyperdeeponet import c_HyperDeepONet
+from model_fusion_deeponet import Fusion_DeepONet
+from model_hyper_mscale_deeponet import HyperMscaleDeepONet
 from data_loader import CavityDataset
 
 def get_args():
     parser = argparse.ArgumentParser(description="Evaluation Script for Task III: Cavity Flow")
     parser.add_argument('--model', type=str, required=True,
-                        choices=['deeponet', 'fno', 'unet', 'vit', 'ae', 'pt','mscale_deeponet', 'hyperdeeponet', 'c_hyperdeeponet'], help='Choose model')
+                        choices=['deeponet', 'fno', 'unet', 'vit', 'ae', 'pt', 'mscale_deeponet', 'hyperdeeponet',
+                                 'c_hyperdeeponet', 'fusion_deeponet', 'hyper_mscale_deeponet'], help='Choose model')
     parser.add_argument('--data_dir', type=str, default='./data/cavity', help='Path to .npz data')
     parser.add_argument('--pt_path', type=str, default='./cavity_dataset.pt',
                         help='Compact .pt dataset file to load directly (built from .npz if missing)')
@@ -64,8 +67,14 @@ def main():
         model = HyperDeepONet(branch_dim=1, trunk_dim=2, hidden_dim=77, num_outputs=10,
                               trunk_depth=3, branch_depth=3, activation='GELU')
     elif args.model == 'c_hyperdeeponet':
-        model = model = c_HyperDeepONet(branch_dim=1, trunk_dim=2, hidden_dim=77, num_outputs=10,
-                                        trunk_depth=3, branch_depth=3, activation='GELU',num_chunk=2)
+        model = c_HyperDeepONet(branch_dim=1, trunk_dim=2, hidden_dim=77, num_outputs=10,
+                                trunk_depth=3, branch_depth=3, activation='GELU', num_chunk=2)
+    elif args.model == 'fusion_deeponet':
+        model = Fusion_DeepONet(branch_dim=1, trunk_dim=2, hidden_dim=77, num_outputs=10,
+                                depth=5, activation='Tanh')
+    elif args.model == 'hyper_mscale_deeponet':
+        model = HyperMscaleDeepONet(branch_dim=1, trunk_dim=2, hidden_dim=68, num_outputs=10,
+                                    depth=4, activation='GELU')
 
     model = model.to(device)
 
@@ -86,12 +95,12 @@ def main():
                 x_in = x.permute(0, 3, 1, 2)
                 pred = model(x_in)
                 if args.model == 'unet': pred = pred.permute(0, 2, 3, 1)
-            elif args.model in ['deeponet', 'mscale_deeponet']:
+            elif args.model in ['deeponet', 'mscale_deeponet', 'fusion_deeponet']:
                 B = x.shape[0]
                 x_branch = x[:, 0, 0, 0:1]
                 x_trunk = x[0, :, :, 1:3].reshape(-1, 2)
                 pred = model(x_branch, x_trunk).view(B, 50, 50, 10)
-            elif args.model in ['hyperdeeponet', 'c_hyperdeeponet']:
+            elif args.model in ['hyperdeeponet', 'c_hyperdeeponet', 'hyper_mscale_deeponet']:
                 B = x.shape[0]
                 x_branch = x[:, 0, 0, 0:1]
                 x0 = x[:, :, :, 1:3]
