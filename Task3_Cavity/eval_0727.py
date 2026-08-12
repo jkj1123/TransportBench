@@ -67,11 +67,11 @@ def main():
         model = HyperDeepONet(branch_dim=1, trunk_dim=2, hidden_dim=77, num_outputs=10,
                               trunk_depth=3, branch_depth=3, activation='GELU')
     elif args.model == 'c_hyperdeeponet':
-        model = c_HyperDeepONet(branch_dim=1, trunk_dim=2, hidden_dim=77, num_outputs=10,
-                                trunk_depth=3, branch_depth=3, activation='GELU', num_chunk=2)
+        model = c_HyperDeepONet(branch_dim=1, trunk_dim=2, hidden_dim=77, num_basis = 100, num_outputs=10,
+                                trunk_depth=3, branch_depth=3, activation='GELU',chunk_in = 100, chunk_out = 4)
     elif args.model == 'fusion_deeponet':
-        model = Fusion_DeepONet(branch_dim=1, trunk_dim=2, hidden_dim=77, num_outputs=10,
-                                depth=5, activation='Tanh')
+        model = Fusion_DeepONet(branch_dim=1, trunk_dim=2, hidden_dim=212, num_outputs=10,
+                                depth=7, activation='Tanh')
     elif args.model == 'hyper_mscale_deeponet':
         model = HyperMscaleDeepONet(branch_dim=1, trunk_dim=2, hidden_dim=68, num_outputs=10,
                                     depth=4, activation='GELU')

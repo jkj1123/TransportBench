@@ -41,8 +41,8 @@ def build_model(model_name, use_fourier):
                                                                 scales=[1, 2, 4, 8, 16], depth=4, activation='GELU')
     elif model_name == 'hyperdeeponet': return HyperDeepONet(branch_dim=3, trunk_dim=2, hidden_dim=78, num_outputs=4,
                                                           trunk_depth=3, branch_depth=3, activation='GELU')
-    elif model_name == 'c_hyperdeeponet': return c_HyperDeepONet(branch_dim=3, trunk_dim=2, hidden_dim=77, num_outputs=4,
-                                                              trunk_depth=3, branch_depth=3, activation='GELU', num_chunk=2)
+    elif model_name == 'c_hyperdeeponet': return c_HyperDeepONet(branch_dim=3, trunk_dim=2, hidden_dim=77, num_basis=100, num_outputs=4,
+                                                              trunk_depth=3, branch_depth=3, activation='GELU', chunk_in=100, chunk_out=4)
     elif model_name == 'fusion_deeponet': return Fusion_DeepONet(branch_dim=3, trunk_dim=2, hidden_dim=77, num_outputs=4,
                                                               depth=5, activation='Tanh')
     elif model_name == 'hyper_mscale_deeponet': return HyperMscaleDeepONet(branch_dim=3, trunk_dim=2, hidden_dim=68, num_outputs=4,

@@ -12,9 +12,9 @@ import math
 
 
 class c_HyperDeepONet(nn.Module):
-    def __init__(self, branch_dim=674, trunk_dim=2, hidden_dim=46,
+    def __init__(self, branch_dim=674, trunk_dim=2, hidden_dim=46, num_basis = 100,
                  num_outputs=4, trunk_depth=3, branch_depth=3,
-                 activation='GELU',num_chunk = 1):
+                 activation='GELU',chunk_in= 100, chunk_out = 100):
         super().__init__()
 
         if activation == 'Tanh':
@@ -27,7 +27,7 @@ class c_HyperDeepONet(nn.Module):
             raise ValueError(f"Unsupported activation: {activation}")
 
         # Trunk architecture: [trunk_dim, hidden, ..., hidden, num_outputs]
-        self.trunk_dims = [trunk_dim] + [hidden_dim] * trunk_depth + [num_outputs]
+        self.trunk_dims = ([trunk_dim] + [hidden_dim] * trunk_depth + [num_basis, num_outputs])
 
         # Total parameters needed to construct the trunk net
         t_para = 0
@@ -37,11 +37,15 @@ class c_HyperDeepONet(nn.Module):
 
         ## defining number of chunks and number of sensors
         self.param_size = t_para
-        self.num_chunks = num_chunk
-        self.num_sensor = math.ceil(t_para / self.num_chunks)
+        self.chunk_in = chunk_in
+        self.chunk_out = chunk_out
+
+        self.num_chunks = math.ceil(self.param_size / chunk_out)
+
+        self.latent_chunk = nn.Parameter(torch.randn(self.num_chunks, chunk_in))
 
         # Branch: single network → t_para (trunk weights/biases)
-        branch_dims = [branch_dim + 1] + [hidden_dim] * branch_depth + [self.num_sensor]
+        branch_dims = [branch_dim + chunk_in] + [hidden_dim] * branch_depth + [chunk_out]
         self.branch_net = _MLP(branch_dims, act)
 
     def _branch_forward(self, x):
@@ -91,27 +95,18 @@ class c_HyperDeepONet(nn.Module):
             [B, N, num_outputs]
         """
 
-        B,D = x_branch.shape[0], x_branch.shape[1]
+        B = x_branch.shape[0]
+        K = self.num_chunks
+        
+        x_branch = x_branch.unsqueeze(1).repeat(1, K, 1)    # [B, branch_dim] -> [B, 1, branch_dim] -> [B, K, branch_dim]
+        z = self.latent_chunk.unsqueeze(0).expand(B, -1, -1)    # [K, chunk_in] -> [B, K, chunk_in]
 
-        param_size = self.param_size
-        num_chunk = self.num_chunks
-        num_sensor = self.num_sensor
-
-        params = x_branch.new_empty(B, num_chunk, num_sensor).uniform_(0, 1)    # [B, num_chunk, num_sensor]
+        hyper_input = torch.cat([x_branch, z], dim=-1)    # [B, K, branch_dim + chunk_in]
         
-        x_branch = x_branch.unsqueeze(1).repeat(1, num_chunk, 1)    # [B, branch_dim] -> [B, 1, branch_dim] -> [B, num_chunk, branch_dim]
-        new_col = x_branch.new_zeros(B, num_chunk, 1)   # [B, num_chunk, 1]
-
+        params = self._branch_forward(hyper_input)    # [B, K, chunk_out]
         
-        for i in range(num_chunk):
-            new_col[:,i,0] = i/num_chunk
-        
-        x_branch = torch.cat([x_branch, new_col], dim=2)     # [B, num_chunk, branch_dim + 1]
-        
-        params =  self._branch_forward(x_branch)    # [B, num_chunk, num_sensor]
-        
-        params = params.reshape(B,num_chunk*num_sensor)     # [B, num_chunk * num_sensor]
-        params = params[:, :param_size]                     # [B, param_size]
+        params = params.reshape(B, -1)     # [B, K * chunk_out]
+        params = params[:, :self.param_size]                     # [B, param_size]
 
         return self._trunk_forward(params, x_trunk)
 
