@@ -1,3 +1,14 @@
+"""
+Overhead-fixed training script for Task II (Cylinder).
+
+Identical to train.py in every respect (args, model configs, optimizer,
+scheduler, logging, checkpointing) EXCEPT the data path: it uses
+CylinderDatasetFast + FastBatchIterator (data_loader_fast.py) instead of
+CylinderDataset + torch.utils.data.DataLoader, which removes a ~47ms/epoch
+fixed cost (DataLoader's per-epoch default_collate re-stacking the whole
+dataset from scratch) that was independent of model size and dominated wall
+time for small hyperdeeponet configs. train.py / data_loader.py are untouched.
+"""
 import os
 import argparse
 import random
@@ -6,7 +17,6 @@ import torch.nn as nn
 import torch.optim as optim
 import numpy as np
 import matplotlib.pyplot as plt
-from torch.utils.data import DataLoader, random_split
 from tqdm import tqdm
 
 from model_deeponet import BoltzmannDeepONet
@@ -17,16 +27,17 @@ from model_ae import Autoencoder
 from model_pt import PointTransformer
 from model_mscale_deeponet import MscaleDeepONet
 from model_hyperdeeponet import HyperDeepONet
+from model_L_hyperdeeponet import HyperDeepONet as L_HyperDeepONet
 from model_hyper_mscale_deeponet import HyperMscaleDeepONet
 from model_c_hyperdeeponet import c_HyperDeepONet
 from model_fusion_deeponet import Fusion_DeepONet
 from model_residual_fusion_deeponet import Residual_Fusion_DeepONet
-from data_loader import CylinderDataset
+from data_loader_fast import CylinderDatasetFast, FastBatchIterator
 
 def get_args():
-    parser = argparse.ArgumentParser(description="TransportBench - Task II: Cylinder Flow")
+    parser = argparse.ArgumentParser(description="TransportBench - Task II: Cylinder Flow (overhead-fixed loader)")
     parser.add_argument('--model', type=str, required=True,
-                        choices=['deeponet', 'fno', 'unet', 'vit', 'ae', 'pt', 'mscale_deeponet', 'hyperdeeponet', 'c_hyperdeeponet', 'hyper_mscale_deeponet', 'fusion_deeponet', 'residual_fusion_deeponet'],
+                        choices=['deeponet', 'fno', 'unet', 'vit', 'ae', 'pt', 'mscale_deeponet', 'hyperdeeponet', 'L_hyperdeeponet', 'c_hyperdeeponet', 'hyper_mscale_deeponet', 'fusion_deeponet', 'residual_fusion_deeponet'],
                         help='Choose the baseline model')
     parser.add_argument('--epochs', type=int, default=2500, help='Number of training epochs')
     parser.add_argument('--batch_size', type=int, default=16, help='Batch size')
@@ -34,9 +45,10 @@ def get_args():
     parser.add_argument('--data_path', type=str, default='./data/cylinder_full_2400.pt', help='Path to dataset')
     parser.add_argument('--save_dir', type=str, default='./checkpoints', help='Directory to save models')
     parser.add_argument('--lr_decay_step', type=int, default=0,
-                        help='Decay LR every N training iterations (batches). 0 = disabled (paper default: no scheduler).')
+                        help='Decay LR every N epochs (one scheduler.step() per epoch, independent of '
+                             '--batch_size / iterations-per-epoch). 0 = disabled (paper default: no scheduler).')
     parser.add_argument('--lr_decay_gamma', type=float, default=1.0,
-                        help='Multiplicative LR decay factor applied every --lr_decay_step iterations.')
+                        help='Multiplicative LR decay factor applied every --lr_decay_step epochs.')
     parser.add_argument('--run_tag', type=str, default='',
                         help='Optional suffix so this run writes to output/<model>_<run_tag>/ instead of '
                              'output/<model>/, to avoid clobbering/mixing with a prior run of the same model.')
@@ -59,7 +71,7 @@ def main():
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
 
-    print(f"Starting Task II Training | Model: {args.model.upper()} | Device: {device}")
+    print(f"Starting Task II Training [fast loader] | Model: {args.model.upper()} | Device: {device}")
 
     # Save to output/<model>/ (or output/<model>_<run_tag>/ if --run_tag given), aligned with Task1 structure
     model_dir_name = f"{args.model}_{args.run_tag}" if args.run_tag else args.model
@@ -67,8 +79,7 @@ def main():
     os.makedirs(args.save_dir, exist_ok=True)
     save_path = os.path.join(args.save_dir, f"best_model.pth")
 
-    # Test Rel2 Error logging, every REL2_LOG_INTERVAL epochs (per-epoch was too much
-    # file-I/O overhead for tiny models — dominated wall-clock time regardless of param count)
+    # Test Rel2 Error logging, every REL2_LOG_INTERVAL epochs
     REL2_LOG_INTERVAL = 50
     rel2_log_path = os.path.join(args.save_dir, 'rel2_history.csv')
     if not os.path.exists(rel2_log_path):
@@ -78,13 +89,19 @@ def main():
     # Determine data loading mode: grid-based vs coordinate-based
     data_mode = 'grid' if args.model in ['fno', 'unet', 'vit', 'ae'] else 'deeponet'
 
-    dataset = CylinderDataset(args.data_path, mode=data_mode)
-    train_size = int(0.8 * len(dataset))
-    test_size = len(dataset) - train_size
-    train_data, test_data = random_split(dataset, [train_size, test_size], generator=torch.Generator().manual_seed(42))
+    dataset = CylinderDatasetFast(args.data_path, mode=data_mode, device=device)
+    train_idx, test_idx = dataset.split(train_ratio=0.8, seed=42)
+    train_idx, test_idx = train_idx.to(device), test_idx.to(device)
 
-    train_loader = DataLoader(train_data, batch_size=args.batch_size, shuffle=True)
-    test_loader = DataLoader(test_data, batch_size=args.batch_size, shuffle=False)
+    if data_mode == 'grid':
+        train_tensors = (dataset.x_input_all[train_idx], dataset.target_all[train_idx])
+        test_tensors = (dataset.x_input_all[test_idx], dataset.target_all[test_idx])
+    else:
+        train_tensors = (dataset.branch_all[train_idx], dataset.target_all[train_idx])
+        test_tensors = (dataset.branch_all[test_idx], dataset.target_all[test_idx])
+
+    train_loader = FastBatchIterator(train_tensors, batch_size=args.batch_size, shuffle=True, device=device)
+    test_loader = FastBatchIterator(test_tensors, batch_size=args.batch_size, shuffle=False, device=device)
 
     # Initialize model
     if args.model == 'fno':
@@ -106,8 +123,11 @@ def main():
         hd_hidden_dim = args.hidden_dim if args.hidden_dim > 0 else 78
         model = HyperDeepONet(branch_dim=2, trunk_dim=2, hidden_dim=hd_hidden_dim, num_outputs=4,
                               trunk_depth=3, branch_depth=3, activation='GELU')
+    elif args.model == 'L_hyperdeeponet':
+        lh_hidden_dim = args.hidden_dim if args.hidden_dim > 0 else 30
+        model = L_HyperDeepONet(branch_dim=2, trunk_dim=2, hidden_dim=lh_hidden_dim, num_outputs=4,
+                                trunk_depth=3, branch_depth=3, activation='GELU')
     elif args.model == 'c_hyperdeeponet':
-        # 1'' config: 1,000,099 params (~1.00M budget), trunk [2,160,160,160,128,4]
         model = c_HyperDeepONet(branch_dim=2, trunk_dim=2, hidden_dim=160, num_basis=128,
                                 num_outputs=4, trunk_depth=3, branch_depth=3, activation='GELU',
                                 chunk_in=2525, chunk_out=384)
@@ -115,11 +135,9 @@ def main():
         model = HyperMscaleDeepONet(branch_dim=2, trunk_dim=2, hidden_dim=68, num_outputs=4,
                                     depth=4, activation='GELU')
     elif args.model == 'fusion_deeponet':
-        # 1,010,034 params (~1.01M budget), branch [2,278,...,278,1112], trunk [2,278,...,278,278]
         model = Fusion_DeepONet(branch_dim=2, trunk_dim=2, hidden_dim=278, num_outputs=4,
                                 depth=5, activation='GELU')
     elif args.model == 'residual_fusion_deeponet':
-        # Same 1,010,034 params; branch-to-trunk gate uses 1+skip (residual)
         model = Residual_Fusion_DeepONet(branch_dim=2, trunk_dim=2, hidden_dim=278, num_outputs=4,
                                          depth=5, activation='GELU')
 
@@ -127,7 +145,6 @@ def main():
     print(f"Model Parameters: {sum(p.numel() for p in model.parameters()) / 1e6:.2f} M")
 
     optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=1e-4)
-    # Paper: no scheduler for Tasks I-III (opt-in override via --lr_decay_step/--lr_decay_gamma)
     scheduler = None
     if args.lr_decay_step > 0:
         scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=args.lr_decay_step, gamma=args.lr_decay_gamma)
@@ -148,20 +165,24 @@ def main():
             optimizer.zero_grad()
 
             if data_mode == 'grid':
-                x, y = batch[0].to(device), batch[1].to(device)
+                x, y = batch
                 pred = model(x)
             else:
-                x_branch, x_trunk, y = batch[0].to(device), batch[1].to(device), batch[2].to(device)
+                x_branch, y = batch
                 x_branch = x_branch[:, :2]  # (Kn, Ma)
-                x_trunk = x_trunk[0]  # All samples share the same grid
+                x_trunk = dataset.trunk_shared  # all samples share the same grid
                 pred = model(x_branch, x_trunk)
 
             loss = criterion(pred, y)
             loss.backward()
             optimizer.step()
-            if scheduler is not None:
-                scheduler.step()
             train_loss_acc += loss.item()
+
+        # lr decay is epoch-based (one scheduler.step() per epoch, regardless of
+        # how many mini-batches/iterations that epoch contains), so --lr_decay_step
+        # always means "every N epochs" no matter what --batch_size is.
+        if scheduler is not None:
+            scheduler.step()
 
         avg_train_loss = train_loss_acc / len(train_loader)
         history['train_loss'].append(avg_train_loss)
@@ -172,12 +193,12 @@ def main():
         with torch.no_grad():
             for batch in test_loader:
                 if data_mode == 'grid':
-                    x, y = batch[0].to(device), batch[1].to(device)
+                    x, y = batch
                     pred = model(x)
                 else:
-                    x_branch, x_trunk, y = batch[0].to(device), batch[1].to(device), batch[2].to(device)
+                    x_branch, y = batch
                     x_branch = x_branch[:, :2]
-                    x_trunk = x_trunk[0]
+                    x_trunk = dataset.trunk_shared
                     pred = model(x_branch, x_trunk)
 
                 loss = criterion(pred, y)
@@ -232,7 +253,7 @@ def main():
     plt.yscale('log')
     plt.xlabel('Epoch')
     plt.ylabel('Loss')
-    plt.title(f'{args.model.upper()} Loss Curve')
+    plt.title(f'{args.model.upper()} Loss Curve [fast loader]')
     plt.legend()
     plt.grid(True, alpha=0.3)
     plt.tight_layout()

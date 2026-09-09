@@ -19,4 +19,4 @@ __pycache__/
 papers/
 
 *.pth
-*.npy
+*.npy*.bak

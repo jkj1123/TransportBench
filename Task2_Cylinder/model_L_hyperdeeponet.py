@@ -30,8 +30,21 @@ class HyperDeepONet(nn.Module):
 
         # Total parameters needed to construct the trunk net
         t_para = 0
-        for i in range(len(self.trunk_dims) - 1):
-            t_para += self.trunk_dims[i] * self.trunk_dims[i + 1] + self.trunk_dims[i + 1]
+        r = 4
+
+        for i in range(1):
+                    t_para += self.trunk_dims[i] * self.trunk_dims[i + 1] + self.trunk_dims[i + 1]
+
+        for i in range(1,len(self.trunk_dims) - 2):
+            d_in = self.trunk_dims[i]
+            d_out = self.trunk_dims[i + 1]
+
+            t_para += d_out * r
+            t_para += r * d_in
+            t_para += d_out
+
+        for i in range(len(self.trunk_dims) - 2, len(self.trunk_dims) - 1):
+                t_para += self.trunk_dims[i] * self.trunk_dims[i + 1] + self.trunk_dims[i + 1]
 
         # Branch: single network → t_para (trunk weights/biases)
         branch_dims = [branch_dim] + [hidden_dim] * branch_depth + [t_para]
@@ -53,17 +66,39 @@ class HyperDeepONet(nn.Module):
         _, N, _ = x_trunk.shape
         y = x_trunk  # [B, N, trunk_dim]
         start = 0
+        r = 4 
 
-        for i in range(len(self.trunk_dims) - 2):
+        for i in range(1):
             d_in, d_out = self.trunk_dims[i], self.trunk_dims[i + 1]
-
+        
             w_sz = d_in * d_out
             weight = params[:, start:start + w_sz].reshape(B, d_out, d_in)
             start += w_sz
             bias = params[:, start:start + d_out].reshape(B, 1, d_out)
             start += d_out
-
+        
             y = torch.einsum("bij,bgj->bgi", weight, y) + bias  # [B, N, d_out]
+            y = self._trunk_act(y)
+
+        for i in range(1, len(self.trunk_dims) - 2):
+            d_in, d_out = self.trunk_dims[i], self.trunk_dims[i + 1]
+
+            weight1 = params[:, start:start + d_out*r].reshape(B, d_out, r)
+            start += d_out*r
+
+            weight2 = params[:, start:start + r*d_in].reshape(B, r, d_in)
+            start += r*d_in
+
+            bias = params[:, start:start + d_out].reshape(B, 1, d_out)
+            start += d_out
+
+            z = torch.einsum("brj,bgj->bgr", weight2, y)
+            # z: [B, N, r]
+            # weight1: [B, d_out, r]
+            y = torch.einsum("bir,bgr->bgi", weight1, z)
+            # y: [B, N, d_out]
+            y = y + bias
+
             y = self._trunk_act(y)
 
         # Last layer: no activation
@@ -72,7 +107,8 @@ class HyperDeepONet(nn.Module):
         weight = params[:, start:start + w_sz].reshape(B, d_out, d_in)
         start += w_sz
         bias = params[:, start:start + d_out].reshape(B, 1, d_out)
-
+        start += d_out
+        
         y = torch.einsum("bij,bgj->bgi", weight, y) + bias  # [B, N, num_outputs]
         return y
 

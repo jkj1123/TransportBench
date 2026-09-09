@@ -15,17 +15,12 @@ from model_ae import Autoencoder
 from model_pt import PointTransformer
 from model_mscale_deeponet import MscaleDeepONet
 from model_hyperdeeponet import HyperDeepONet
-from model_L_hyperdeeponet import HyperDeepONet as L_HyperDeepONet
-from model_hyper_mscale_deeponet import HyperMscaleDeepONet
-from model_c_hyperdeeponet import c_HyperDeepONet
-from model_fusion_deeponet import Fusion_DeepONet
-from model_residual_fusion_deeponet import Residual_Fusion_DeepONet
 from data_loader import CylinderDataset
 
 def get_args():
     parser = argparse.ArgumentParser(description="Evaluation Script for Task II: Cylinder Flow")
     parser.add_argument('--model', type=str, required=True,
-                        choices=['deeponet', 'fno', 'unet', 'vit', 'ae', 'pt', 'mscale_deeponet', 'hyperdeeponet', 'L_hyperdeeponet', 'c_hyperdeeponet', 'hyper_mscale_deeponet', 'fusion_deeponet', 'residual_fusion_deeponet'],
+                        choices=['deeponet', 'fno', 'unet', 'vit', 'ae', 'pt', 'mscale_deeponet', 'hyperdeeponet'],
                         help='Choose the baseline model to evaluate')
     parser.add_argument('--data_path', type=str, default='./data/cylinder_full_2400.pt', help='Path to dataset')
     parser.add_argument('--checkpoint', type=str, default=None, help='Path to weights (default: output/<model>/best_model.pth)')
@@ -70,25 +65,6 @@ def main():
     elif args.model == 'hyperdeeponet':
         model = HyperDeepONet(branch_dim=2, trunk_dim=2, hidden_dim=78, num_outputs=4,
                               trunk_depth=3, branch_depth=3, activation='GELU')
-    elif args.model == 'L_hyperdeeponet':
-        model = L_HyperDeepONet(branch_dim=2, trunk_dim=2, hidden_dim=30, num_outputs=4,
-                                trunk_depth=3, branch_depth=3, activation='GELU')
-    elif args.model == 'c_hyperdeeponet':
-        # 1'' config: 1,000,099 params (~1.00M budget), trunk [2,160,160,160,128,4]
-        model = c_HyperDeepONet(branch_dim=2, trunk_dim=2, hidden_dim=160, num_basis=128,
-                                num_outputs=4, trunk_depth=3, branch_depth=3, activation='GELU',
-                                chunk_in=2525, chunk_out=384)
-    elif args.model == 'hyper_mscale_deeponet':
-        model = HyperMscaleDeepONet(branch_dim=2, trunk_dim=2, hidden_dim=68, num_outputs=4,
-                                    depth=4, activation='GELU')
-    elif args.model == 'fusion_deeponet':
-        # 1,010,034 params (~1.01M budget), branch [2,278,...,278,1112], trunk [2,278,...,278,278]
-        model = Fusion_DeepONet(branch_dim=2, trunk_dim=2, hidden_dim=278, num_outputs=4,
-                                depth=5, activation='GELU')
-    elif args.model == 'residual_fusion_deeponet':
-        # Same 1,010,034 params; branch-to-trunk gate uses 1+skip (residual)
-        model = Residual_Fusion_DeepONet(branch_dim=2, trunk_dim=2, hidden_dim=278, num_outputs=4,
-                                         depth=5, activation='GELU')
 
     model = model.to(device)
 
@@ -160,9 +136,9 @@ def main():
 
     print("-" * 50)
     print(f"Final Results for {args.model.upper()}:")
-    print(f"Mean Absolute Error (MAE) : {final_mae:.4g}")
-    print(f"Mean Squared Error (MSE)  : {final_mse:.4g}")
-    print(f"Relative L2 Error         : {final_rel_l2:.4g}")
+    print(f"Mean Absolute Error (MAE) : {final_mae:.5f}")
+    print(f"Mean Squared Error (MSE)  : {final_mse:.5f}")
+    print(f"Relative L2 Error         : {final_rel_l2:.5f}")
     print("-" * 50)
 
     # 5. Generate visualizations for multiple samples and variables
