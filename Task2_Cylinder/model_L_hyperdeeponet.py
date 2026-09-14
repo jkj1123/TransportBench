@@ -30,7 +30,7 @@ class HyperDeepONet(nn.Module):
 
         # Total parameters needed to construct the trunk net
         t_para = 0
-        r = 4
+        r = 8  # changed from 4 -> 8 per user request
 
         for i in range(1):
                     t_para += self.trunk_dims[i] * self.trunk_dims[i + 1] + self.trunk_dims[i + 1]
@@ -66,7 +66,7 @@ class HyperDeepONet(nn.Module):
         _, N, _ = x_trunk.shape
         y = x_trunk  # [B, N, trunk_dim]
         start = 0
-        r = 4 
+        r = 8  # changed from 4 -> 8 per user request
 
         for i in range(1):
             d_in, d_out = self.trunk_dims[i], self.trunk_dims[i + 1]

@@ -10,6 +10,7 @@ dataset from scratch) that was independent of model size and dominated wall
 time for small hyperdeeponet configs. train.py / data_loader.py are untouched.
 """
 import os
+import time
 import argparse
 import random
 import torch
@@ -28,8 +29,10 @@ from model_pt import PointTransformer
 from model_mscale_deeponet import MscaleDeepONet
 from model_hyperdeeponet import HyperDeepONet
 from model_L_hyperdeeponet import HyperDeepONet as L_HyperDeepONet
+from model_ac_hyperdeeponet import HyperDeepONet as AC_HyperDeepONet
 from model_hyper_mscale_deeponet import HyperMscaleDeepONet
 from model_c_hyperdeeponet import c_HyperDeepONet
+from model_cf_hyperdeeponet import c_HyperDeepONet as CF_HyperDeepONet
 from model_fusion_deeponet import Fusion_DeepONet
 from model_residual_fusion_deeponet import Residual_Fusion_DeepONet
 from data_loader_fast import CylinderDatasetFast, FastBatchIterator
@@ -37,7 +40,7 @@ from data_loader_fast import CylinderDatasetFast, FastBatchIterator
 def get_args():
     parser = argparse.ArgumentParser(description="TransportBench - Task II: Cylinder Flow (overhead-fixed loader)")
     parser.add_argument('--model', type=str, required=True,
-                        choices=['deeponet', 'fno', 'unet', 'vit', 'ae', 'pt', 'mscale_deeponet', 'hyperdeeponet', 'L_hyperdeeponet', 'c_hyperdeeponet', 'hyper_mscale_deeponet', 'fusion_deeponet', 'residual_fusion_deeponet'],
+                        choices=['deeponet', 'fno', 'unet', 'vit', 'ae', 'pt', 'mscale_deeponet', 'hyperdeeponet', 'L_hyperdeeponet', 'c_hyperdeeponet', 'cf_hyperdeeponet', 'ac_hyperdeeponet', 'hyper_mscale_deeponet', 'fusion_deeponet', 'residual_fusion_deeponet'],
                         help='Choose the baseline model')
     parser.add_argument('--epochs', type=int, default=2500, help='Number of training epochs')
     parser.add_argument('--batch_size', type=int, default=16, help='Batch size')
@@ -55,6 +58,24 @@ def get_args():
     parser.add_argument('--hidden_dim', type=int, default=0,
                         help='Override hidden_dim for hyperdeeponet (0 = use model default, 78 / ~1M params). '
                              'Lets a param-count sweep pick hidden_dim without touching the model file.')
+    parser.add_argument('--c_num_basis', type=int, default=0,
+                        help='c_hyperdeeponet: override num_basis (0 = default 128).')
+    parser.add_argument('--c_chunk_in', type=int, default=0,
+                        help='c_hyperdeeponet: override chunk_in (0 = default 2525).')
+    parser.add_argument('--c_chunk_out', type=int, default=0,
+                        help='c_hyperdeeponet: override chunk_out (0 = default 384).')
+    parser.add_argument('--c_num_chunks', type=int, default=0,
+                        help='c_hyperdeeponet: fix num_chunks directly, independent of hidden_dim '
+                             '(0 = off, num_chunks derived from chunk_out as usual). When set, '
+                             'chunk_out is auto-derived to cover param_size and --c_chunk_out is ignored.')
+    parser.add_argument('--cf_num_basis', type=int, default=0,
+                        help='cf_hyperdeeponet: override num_basis (0 = default 128).')
+    parser.add_argument('--cf_chunk_in', type=int, default=0,
+                        help='cf_hyperdeeponet: override chunk_in (0 = default 2525).')
+    parser.add_argument('--cf_chunk_out', type=int, default=0,
+                        help='cf_hyperdeeponet: override chunk_out (0 = default 384).')
+    parser.add_argument('--rel2_log_interval', type=int, default=50,
+                        help='Log test rel-L2 error to rel2_history.csv every N epochs.')
     return parser.parse_args()
 
 def main():
@@ -80,11 +101,26 @@ def main():
     save_path = os.path.join(args.save_dir, f"best_model.pth")
 
     # Test Rel2 Error logging, every REL2_LOG_INTERVAL epochs
-    REL2_LOG_INTERVAL = 50
+    REL2_LOG_INTERVAL = args.rel2_log_interval
     rel2_log_path = os.path.join(args.save_dir, 'rel2_history.csv')
     if not os.path.exists(rel2_log_path):
         with open(rel2_log_path, 'w') as f:
-            f.write('epoch,test_rel2_error\n')
+            f.write('epoch,test_rel2_error,timestamp\n')
+
+    # Per-run timestamp/metadata log (start time now; end time + elapsed appended after training)
+    run_start_time = time.time()
+    run_info_path = os.path.join(args.save_dir, 'run_info.txt')
+    with open(run_info_path, 'w') as f:
+        f.write(f"model={args.model}\n")
+        f.write(f"hidden_dim_override={args.hidden_dim}\n")
+        f.write(f"data_path={args.data_path}\n")
+        f.write(f"epochs={args.epochs}\n")
+        f.write(f"batch_size={args.batch_size}\n")
+        f.write(f"lr={args.lr}\n")
+        f.write(f"lr_decay_step={args.lr_decay_step}\n")
+        f.write(f"lr_decay_gamma={args.lr_decay_gamma}\n")
+        f.write(f"run_tag={args.run_tag}\n")
+        f.write(f"start_time={time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(run_start_time))}\n")
 
     # Determine data loading mode: grid-based vs coordinate-based
     data_mode = 'grid' if args.model in ['fno', 'unet', 'vit', 'ae'] else 'deeponet'
@@ -127,22 +163,43 @@ def main():
         lh_hidden_dim = args.hidden_dim if args.hidden_dim > 0 else 30
         model = L_HyperDeepONet(branch_dim=2, trunk_dim=2, hidden_dim=lh_hidden_dim, num_outputs=4,
                                 trunk_depth=3, branch_depth=3, activation='GELU')
+    elif args.model == 'ac_hyperdeeponet':
+        ac_hidden_dim = args.hidden_dim if args.hidden_dim > 0 else 34
+        model = AC_HyperDeepONet(branch_dim=2, trunk_dim=2, hidden_dim=ac_hidden_dim, num_outputs=4,
+                                 trunk_depth=3, branch_depth=3, activation='GELU')
     elif args.model == 'c_hyperdeeponet':
-        model = c_HyperDeepONet(branch_dim=2, trunk_dim=2, hidden_dim=160, num_basis=128,
+        c_hidden_dim = args.hidden_dim if args.hidden_dim > 0 else 160
+        c_num_basis = args.c_num_basis if args.c_num_basis > 0 else 128
+        c_chunk_in = args.c_chunk_in if args.c_chunk_in > 0 else 2525
+        c_chunk_out = args.c_chunk_out if args.c_chunk_out > 0 else 384
+        c_num_chunks = args.c_num_chunks if args.c_num_chunks > 0 else None
+        model = c_HyperDeepONet(branch_dim=2, trunk_dim=2, hidden_dim=c_hidden_dim, num_basis=c_num_basis,
                                 num_outputs=4, trunk_depth=3, branch_depth=3, activation='GELU',
-                                chunk_in=2525, chunk_out=384)
+                                chunk_in=c_chunk_in, chunk_out=c_chunk_out, num_chunks=c_num_chunks)
+    elif args.model == 'cf_hyperdeeponet':
+        cf_hidden_dim = args.hidden_dim if args.hidden_dim > 0 else 160
+        cf_num_basis = args.cf_num_basis if args.cf_num_basis > 0 else 128
+        cf_chunk_in = args.cf_chunk_in if args.cf_chunk_in > 0 else 2525
+        cf_chunk_out = args.cf_chunk_out if args.cf_chunk_out > 0 else 384
+        model = CF_HyperDeepONet(branch_dim=2, trunk_dim=2, hidden_dim=cf_hidden_dim, num_basis=cf_num_basis,
+                                 num_outputs=4, trunk_depth=3, branch_depth=3, activation='GELU',
+                                 chunk_in=cf_chunk_in, chunk_out=cf_chunk_out)
     elif args.model == 'hyper_mscale_deeponet':
         model = HyperMscaleDeepONet(branch_dim=2, trunk_dim=2, hidden_dim=68, num_outputs=4,
                                     depth=4, activation='GELU')
     elif args.model == 'fusion_deeponet':
-        model = Fusion_DeepONet(branch_dim=2, trunk_dim=2, hidden_dim=278, num_outputs=4,
+        fd_hidden_dim = args.hidden_dim if args.hidden_dim > 0 else 278
+        model = Fusion_DeepONet(branch_dim=2, trunk_dim=2, hidden_dim=fd_hidden_dim, num_outputs=4,
                                 depth=5, activation='GELU')
     elif args.model == 'residual_fusion_deeponet':
         model = Residual_Fusion_DeepONet(branch_dim=2, trunk_dim=2, hidden_dim=278, num_outputs=4,
                                          depth=5, activation='GELU')
 
     model = model.to(device)
-    print(f"Model Parameters: {sum(p.numel() for p in model.parameters()) / 1e6:.2f} M")
+    num_params = sum(p.numel() for p in model.parameters())
+    print(f"Model Parameters: {num_params / 1e6:.2f} M")
+    with open(run_info_path, 'a') as f:
+        f.write(f"num_params={num_params}\n")
 
     optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=1e-4)
     scheduler = None
@@ -218,8 +275,9 @@ def main():
 
         if compute_rel2:
             test_rel2 = rel2_sum / rel2_count
+            now_str = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())
             with open(rel2_log_path, 'a') as f:
-                f.write(f'{epoch + 1},{test_rel2:.6g}\n')
+                f.write(f'{epoch + 1},{test_rel2:.6g},{now_str}\n')
 
         if avg_test_loss < best_test_loss:
             best_test_loss = avg_test_loss
@@ -241,6 +299,12 @@ def main():
             tqdm.write(f"  [BEST SAVED @ epoch {epoch+1}]")
 
     print(f"Training Complete! Best Test Loss: {best_test_loss:.4g}. Model saved to {save_path}")
+
+    run_end_time = time.time()
+    with open(run_info_path, 'a') as f:
+        f.write(f"end_time={time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(run_end_time))}\n")
+        f.write(f"elapsed_sec={run_end_time - run_start_time:.1f}\n")
+        f.write(f"best_test_loss={best_test_loss:.6g}\n")
 
     # Save loss history
     np.save(os.path.join(args.save_dir, 'history.npy'), history)
