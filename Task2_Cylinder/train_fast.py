@@ -29,18 +29,28 @@ from model_pt import PointTransformer
 from model_mscale_deeponet import MscaleDeepONet
 from model_hyperdeeponet import HyperDeepONet
 from model_L_hyperdeeponet import HyperDeepONet as L_HyperDeepONet
-from model_ac_hyperdeeponet import HyperDeepONet as AC_HyperDeepONet
 from model_hyper_mscale_deeponet import HyperMscaleDeepONet
 from model_c_hyperdeeponet import c_HyperDeepONet
 from model_cf_hyperdeeponet import c_HyperDeepONet as CF_HyperDeepONet
+from model_cf_test_hyperdeeponet import cf_test_HyperDeepONet as CF_TEST_HyperDeepONet
+from model_cf_test2_hyperdeeponet import cf_test2_HyperDeepONet as CF_TEST2_HyperDeepONet
+from model_L_D_hyperdeeponet import HyperDeepONet as L_D_HyperDeepONet
+from model_LDg_hyperdeeponet import HyperDeepONet as LDg_HyperDeepONet
+from model_fusion_wbt_deeponet import Fusion_WbWt_DeepONet
 from model_fusion_deeponet import Fusion_DeepONet
 from model_residual_fusion_deeponet import Residual_Fusion_DeepONet
+from model_w_deeponet import W_DeepONet
+from model_wm_deeponet import WM_DeepONet
+from model_whm_deeponet import WHM_DeepONet
+from model_r_deeponet import R_DeepONet
+from model_rm_deeponet import RM_DeepONet
+from model_rhm_deeponet import RHM_DeepONet
 from data_loader_fast import CylinderDatasetFast, FastBatchIterator
 
 def get_args():
     parser = argparse.ArgumentParser(description="TransportBench - Task II: Cylinder Flow (overhead-fixed loader)")
     parser.add_argument('--model', type=str, required=True,
-                        choices=['deeponet', 'fno', 'unet', 'vit', 'ae', 'pt', 'mscale_deeponet', 'hyperdeeponet', 'L_hyperdeeponet', 'c_hyperdeeponet', 'cf_hyperdeeponet', 'ac_hyperdeeponet', 'hyper_mscale_deeponet', 'fusion_deeponet', 'residual_fusion_deeponet'],
+                        choices=['deeponet', 'fno', 'unet', 'vit', 'ae', 'pt', 'mscale_deeponet', 'hyperdeeponet', 'L_hyperdeeponet', 'L_D_hyperdeeponet', 'LDg_hyperdeeponet', 'c_hyperdeeponet', 'cf_hyperdeeponet', 'cf_test_hyperdeeponet', 'cf_test2_hyperdeeponet', 'hyper_mscale_deeponet', 'fusion_deeponet', 'residual_fusion_deeponet', 'w_deeponet', 'wm_deeponet', 'whm_deeponet', 'r_deeponet', 'rm_deeponet', 'rhm_deeponet', 'fusion_wbt_deeponet'],
                         help='Choose the baseline model')
     parser.add_argument('--epochs', type=int, default=2500, help='Number of training epochs')
     parser.add_argument('--batch_size', type=int, default=16, help='Batch size')
@@ -74,6 +84,23 @@ def get_args():
                         help='cf_hyperdeeponet: override chunk_in (0 = default 2525).')
     parser.add_argument('--cf_chunk_out', type=int, default=0,
                         help='cf_hyperdeeponet: override chunk_out (0 = default 384).')
+    parser.add_argument('--cft_num_basis', type=int, default=0,
+                        help='cf_test_hyperdeeponet: override num_basis (0 = default 128).')
+    parser.add_argument('--cft_chunk_in', type=int, default=0,
+                        help='cf_test_hyperdeeponet: override chunk_in (0 = default 100).')
+    parser.add_argument('--cft_chunk_out', type=int, default=0,
+                        help='cf_test_hyperdeeponet: override chunk_out (0 = default 100).')
+    parser.add_argument('--cft2_chunk_in', type=int, default=0,
+                        help='cf_test2_hyperdeeponet: override chunk_in (0 = default 100).')
+    parser.add_argument('--cft2_r', type=int, default=0,
+                        help='cf_test2_hyperdeeponet: override low-rank rank r (0 = default 8).')
+    parser.add_argument('--num_basis', type=int, default=0,
+                        help='w_deeponet/wm_deeponet/whm_deeponet: shared branch/trunk basis width p (0 = default 124).')
+    parser.add_argument('--trunk_hidden_dim', type=int, default=0,
+                        help='whm_deeponet: hidden width of the hypernetwork-generated MLP trunk (0 = default 7).')
+    parser.add_argument('--ld_a', type=float, default=1.0,
+                        help='L_D_hyperdeeponet: fixed (non-learnable) scalar on the low-rank term, '
+                             'W_l(b) = W0_l + a*U_l(b)V_l(b)^T (default 1.0 = unscaled).')
     parser.add_argument('--rel2_log_interval', type=int, default=50,
                         help='Log test rel-L2 error to rel2_history.csv every N epochs.')
     return parser.parse_args()
@@ -149,7 +176,59 @@ def main():
     elif args.model == 'ae':
         model = Autoencoder(in_channels=4, out_channels=4, base_width=36)
     elif args.model == 'deeponet':
-        model = BoltzmannDeepONet(branch_dim=2, trunk_dim=2, hidden_dim=280, num_outputs=4, depth=5)
+        do_hidden_dim = args.hidden_dim if args.hidden_dim > 0 else 280
+        model = BoltzmannDeepONet(branch_dim=2, trunk_dim=2, hidden_dim=do_hidden_dim, num_outputs=4, depth=5)
+    elif args.model == 'w_deeponet':
+        # DeepONet with the trunk MLP replaced by a Wavelet Neural Network
+        # (WNN) layer -- see model_w_deeponet.py. Coordinate range is this
+        # dataset's actual (x, y) grid extent, used to init the wavelet
+        # translation/dilation parameters sensibly.
+        w_hidden_dim = args.hidden_dim if args.hidden_dim > 0 else 169
+        w_num_basis = args.num_basis if args.num_basis > 0 else 123
+        model = W_DeepONet(branch_dim=2, trunk_dim=2, hidden_dim=w_hidden_dim, num_basis=w_num_basis,
+                           num_outputs=4, depth=5, coord_range=[(-3.0, 5.5), (-3.0, 3.0)])
+    elif args.model == 'wm_deeponet':
+        # DeepONet whose trunk is split into a WNN sub-trunk + an MLP
+        # sub-trunk (same input), summed -- see model_wm_deeponet.py.
+        wm_hidden_dim = args.hidden_dim if args.hidden_dim > 0 else 123
+        wm_num_basis = args.num_basis if args.num_basis > 0 else 123
+        model = WM_DeepONet(branch_dim=2, trunk_dim=2, hidden_dim=wm_hidden_dim, num_basis=wm_num_basis,
+                            num_outputs=4, depth=5, coord_range=[(-3.0, 5.5), (-3.0, 3.0)])
+    elif args.model == 'whm_deeponet':
+        # Same WNN + MLP two-sub-trunk idea as wm_deeponet, but the MLP
+        # sub-trunk is hypernetwork-generated (branch net outputs its
+        # weights per-sample) instead of directly learned. See
+        # model_whm_deeponet.py.
+        whm_hidden_dim = args.hidden_dim if args.hidden_dim > 0 else 94
+        whm_trunk_hidden_dim = args.trunk_hidden_dim if args.trunk_hidden_dim > 0 else 7
+        whm_num_basis = args.num_basis if args.num_basis > 0 else 123
+        model = WHM_DeepONet(branch_dim=2, trunk_dim=2, hidden_dim=whm_hidden_dim,
+                             trunk_hidden_dim=whm_trunk_hidden_dim, num_basis=whm_num_basis,
+                             num_outputs=4, depth=5, coord_range=[(-3.0, 5.5), (-3.0, 3.0)])
+    elif args.model == 'r_deeponet':
+        # DeepONet with the trunk MLP replaced by a RIDGELET basis layer
+        # (direction-aligned 1D wavelets, not localized blobs) -- see
+        # model_r_deeponet.py. Direct analogue of w_deeponet.
+        r_hidden_dim = args.hidden_dim if args.hidden_dim > 0 else 169
+        r_num_basis = args.num_basis if args.num_basis > 0 else 123
+        model = R_DeepONet(branch_dim=2, trunk_dim=2, hidden_dim=r_hidden_dim, num_basis=r_num_basis,
+                           num_outputs=4, depth=5, coord_range=[(-3.0, 5.5), (-3.0, 3.0)])
+    elif args.model == 'rm_deeponet':
+        # Ridgelet sub-trunk + MLP sub-trunk, learnable weighted sum --
+        # see model_rm_deeponet.py. Direct analogue of wm_deeponet.
+        rm_hidden_dim = args.hidden_dim if args.hidden_dim > 0 else 123
+        rm_num_basis = args.num_basis if args.num_basis > 0 else 123
+        model = RM_DeepONet(branch_dim=2, trunk_dim=2, hidden_dim=rm_hidden_dim, num_basis=rm_num_basis,
+                            num_outputs=4, depth=5, coord_range=[(-3.0, 5.5), (-3.0, 3.0)])
+    elif args.model == 'rhm_deeponet':
+        # Ridgelet sub-trunk + hypernetwork-generated MLP sub-trunk --
+        # see model_rhm_deeponet.py. Direct analogue of whm_deeponet.
+        rhm_hidden_dim = args.hidden_dim if args.hidden_dim > 0 else 94
+        rhm_trunk_hidden_dim = args.trunk_hidden_dim if args.trunk_hidden_dim > 0 else 7
+        rhm_num_basis = args.num_basis if args.num_basis > 0 else 123
+        model = RHM_DeepONet(branch_dim=2, trunk_dim=2, hidden_dim=rhm_hidden_dim,
+                             trunk_hidden_dim=rhm_trunk_hidden_dim, num_basis=rhm_num_basis,
+                             num_outputs=4, depth=5, coord_range=[(-3.0, 5.5), (-3.0, 3.0)])
     elif args.model == 'pt':
         model = PointTransformer(in_dim=4, out_dim=4, embed_dim=144, depth=4)
     elif args.model == 'mscale_deeponet':
@@ -163,10 +242,20 @@ def main():
         lh_hidden_dim = args.hidden_dim if args.hidden_dim > 0 else 30
         model = L_HyperDeepONet(branch_dim=2, trunk_dim=2, hidden_dim=lh_hidden_dim, num_outputs=4,
                                 trunk_depth=3, branch_depth=3, activation='GELU')
-    elif args.model == 'ac_hyperdeeponet':
-        ac_hidden_dim = args.hidden_dim if args.hidden_dim > 0 else 34
-        model = AC_HyperDeepONet(branch_dim=2, trunk_dim=2, hidden_dim=ac_hidden_dim, num_outputs=4,
-                                 trunk_depth=3, branch_depth=3, activation='GELU')
+    elif args.model == 'L_D_hyperdeeponet':
+        # Low-Rank HyperDeepONet + a shared, directly-learned full-rank
+        # backbone W0 added to each middle trunk layer's low-rank residual:
+        # W_l(b) = W0_l + a*U_l(b) V_l(b)^T. See model_L_D_hyperdeeponet.py.
+        ld_hidden_dim = args.hidden_dim if args.hidden_dim > 0 else 30
+        model = L_D_HyperDeepONet(branch_dim=2, trunk_dim=2, hidden_dim=ld_hidden_dim, num_outputs=4,
+                                  trunk_depth=3, branch_depth=3, activation='GELU', a=args.ld_a)
+    elif args.model == 'LDg_hyperdeeponet':
+        # Scalar-modulated low-rank conditional trunk: W_l(b) = W0_l + s_l(b)*U_l V_l^T,
+        # with W0_l/U_l/V_l/bias all shared (directly learned) and the branch generating
+        # only ONE scalar s_l(b) per middle layer. See model_LDg_hyperdeeponet.py.
+        ldg_hidden_dim = args.hidden_dim if args.hidden_dim > 0 else 30
+        model = LDg_HyperDeepONet(branch_dim=2, trunk_dim=2, hidden_dim=ldg_hidden_dim, num_outputs=4,
+                                  trunk_depth=3, branch_depth=3, activation='GELU')
     elif args.model == 'c_hyperdeeponet':
         c_hidden_dim = args.hidden_dim if args.hidden_dim > 0 else 160
         c_num_basis = args.c_num_basis if args.c_num_basis > 0 else 128
@@ -184,6 +273,29 @@ def main():
         model = CF_HyperDeepONet(branch_dim=2, trunk_dim=2, hidden_dim=cf_hidden_dim, num_basis=cf_num_basis,
                                  num_outputs=4, trunk_depth=3, branch_depth=3, activation='GELU',
                                  chunk_in=cf_chunk_in, chunk_out=cf_chunk_out)
+    elif args.model == 'cf_test_hyperdeeponet':
+        # cf_hyperdeeponet with read-out (trunk weight) and carry (branch's
+        # own forward path) decoupled via a separate linear head per
+        # applicable depth. See model_cf_test_hyperdeeponet.py.
+        cft_hidden_dim = args.hidden_dim if args.hidden_dim > 0 else 160
+        cft_num_basis = args.cft_num_basis if args.cft_num_basis > 0 else 128
+        cft_chunk_in = args.cft_chunk_in if args.cft_chunk_in > 0 else 100
+        cft_chunk_out = args.cft_chunk_out if args.cft_chunk_out > 0 else 100
+        model = CF_TEST_HyperDeepONet(branch_dim=2, trunk_dim=2, hidden_dim=cft_hidden_dim, num_basis=cft_num_basis,
+                                      num_outputs=4, trunk_depth=3, branch_depth=3, activation='GELU',
+                                      chunk_in=cft_chunk_in, chunk_out=cft_chunk_out)
+    elif args.model == 'cf_test2_hyperdeeponet':
+        # cf_test_hyperdeeponet + D (chunk mechanism repurposed to generate
+        # low-rank U(b)/V(b) instead of a full matrix) + B (re-inject raw
+        # (Kn,Ma) at every middle-layer read-out) + A (LayerNorm + smaller
+        # init on the branch's hypernetwork input). See
+        # model_cf_test2_hyperdeeponet.py.
+        cft2_hidden_dim = args.hidden_dim if args.hidden_dim > 0 else 160
+        cft2_chunk_in = args.cft2_chunk_in if args.cft2_chunk_in > 0 else 100
+        cft2_r = args.cft2_r if args.cft2_r > 0 else 8
+        model = CF_TEST2_HyperDeepONet(branch_dim=2, trunk_dim=2, hidden_dim=cft2_hidden_dim,
+                                       num_outputs=4, trunk_depth=3, branch_depth=3, activation='GELU',
+                                       chunk_in=cft2_chunk_in, r=cft2_r)
     elif args.model == 'hyper_mscale_deeponet':
         model = HyperMscaleDeepONet(branch_dim=2, trunk_dim=2, hidden_dim=68, num_outputs=4,
                                     depth=4, activation='GELU')
@@ -191,8 +303,16 @@ def main():
         fd_hidden_dim = args.hidden_dim if args.hidden_dim > 0 else 278
         model = Fusion_DeepONet(branch_dim=2, trunk_dim=2, hidden_dim=fd_hidden_dim, num_outputs=4,
                                 depth=5, activation='GELU')
+    elif args.model == 'fusion_wbt_deeponet':
+        # Smoke-test variant of Fusion_DeepONet: act(Wb@x)*act(Wt@x) +
+        # act(bb)*act(bt) cross-fusion instead of skip[i]*trunk_layer_output.
+        # See model_fusion_wbt_deeponet.py.
+        wbt_hidden_dim = args.hidden_dim if args.hidden_dim > 0 else 278
+        model = Fusion_WbWt_DeepONet(branch_dim=2, trunk_dim=2, hidden_dim=wbt_hidden_dim, num_outputs=4,
+                                     depth=5, activation='GELU')
     elif args.model == 'residual_fusion_deeponet':
-        model = Residual_Fusion_DeepONet(branch_dim=2, trunk_dim=2, hidden_dim=278, num_outputs=4,
+        rfd_hidden_dim = args.hidden_dim if args.hidden_dim > 0 else 278
+        model = Residual_Fusion_DeepONet(branch_dim=2, trunk_dim=2, hidden_dim=rfd_hidden_dim, num_outputs=4,
                                          depth=5, activation='GELU')
 
     model = model.to(device)

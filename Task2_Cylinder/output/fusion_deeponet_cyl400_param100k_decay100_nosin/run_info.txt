@@ -1,0 +1,14 @@
+model=fusion_deeponet
+hidden_dim_override=87
+data_path=./cylinder_full_2400_400_seed42.pt
+epochs=5000
+batch_size=16
+lr=0.001
+lr_decay_step=100
+lr_decay_gamma=0.91
+run_tag=cyl400_param100k_decay100_nosin
+start_time=2026-09-26 13:30:57
+num_params=100074
+end_time=2026-09-26 15:02:20
+elapsed_sec=5483.5
+best_test_loss=5.19112e-05

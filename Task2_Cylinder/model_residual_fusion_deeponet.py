@@ -98,8 +98,9 @@ class Residual_Fusion_DeepONet(nn.Module):
 
         for i in range(self.L-1):
 
-            x_branch = self.act(10*self.ab[i]*self.branch_net[i](x_branch)+self.cb[i])+\
-            10*self.a1b[i]*self.act2(10*self.F1b[i]*self.branch_net[i](x_branch)+self.c1b[i])
+            branch_lin = self.branch_net[i](x_branch)
+            x_branch = self.act(10*self.ab[i]*branch_lin+self.cb[i])+\
+            10*self.a1b[i]*self.act2(10*self.F1b[i]*branch_lin+self.c1b[i])
             skip.append(x_branch)
 
         for i in range(1,self.L-1):
@@ -107,8 +108,9 @@ class Residual_Fusion_DeepONet(nn.Module):
 
         for i in range(self.L-1):
 
-            x_trunk = self.act(10*self.at[i]*self.trunk_net[i](x_trunk)+self.ct[i])+\
-            10*self.a1t[i]*self.act2(10*self.F1t[i]*self.trunk_net[i](x_trunk)+self.c1t[i])
+            trunk_lin = self.trunk_net[i](x_trunk)
+            x_trunk = self.act(10*self.at[i]*trunk_lin+self.ct[i])+\
+            10*self.a1t[i]*self.act2(10*self.F1t[i]*trunk_lin+self.c1t[i])
 
             # Residual gate: identity path preserves trunk magnitude/gradient
             x_trunk = torch.einsum('bk,bik->bik', 1.0 + skip[i], x_trunk)

@@ -16,7 +16,7 @@ class Fusion_DeepONet(nn.Module):
             num_outputs: 10 (Physics quantities)
         """
         super().__init__()
-        
+
         if activation == 'GELU':
             self.act = nn.GELU()
         elif activation == 'Tanh':
@@ -54,18 +54,18 @@ class Fusion_DeepONet(nn.Module):
         for _ in range(depth - 1):
             self.trunk_net.append(nn.Linear(hidden_dim, hidden_dim))
         self.trunk_net.append(nn.Linear(hidden_dim, hidden_dim))
-        
+
         self.num_outputs = num_outputs
         self.hidden_dim = hidden_dim
 
     def forward(self, x_branch, x_trunk):
 
         """Forward pass.
-        
+
         Args:
             x_branch: [Batch, branch_dim]
             x_trunk:  [N_points, trunk_dim]
-        
+
         Returns:
             [Batch, N_points, num_outputs]
         """
@@ -75,29 +75,29 @@ class Fusion_DeepONet(nn.Module):
             x_trunk = x_trunk.unsqueeze(0).repeat(x_branch.shape[0], 1, 1)
 
         skip = []
-        
-        skip = []
 
         for i in range(self.L-1):
 
-            x_branch = self.act(10*self.ab[i]*self.branch_net[i](x_branch)+self.cb[i])+\
-            10*self.a1b[i]*self.act2(10*self.F1b[i]*self.branch_net[i](x_branch)+self.c1b[i])
+            branch_lin = self.branch_net[i](x_branch)
+            x_branch = self.act(10*self.ab[i]*branch_lin+self.cb[i])+\
+            10*self.a1b[i]*self.act2(10*self.F1b[i]*branch_lin+self.c1b[i])
             skip.append(x_branch)
 
-        for i in range(1,self.L-1):    
+        for i in range(1,self.L-1):
             skip[i] = skip[i-1]+skip[i]
-            
+
         for i in range(self.L-1):
 
-            x_trunk = self.act(10*self.at[i]*self.trunk_net[i](x_trunk)+self.ct[i])+\
-            10*self.a1t[i]*self.act2(10*self.F1t[i]*self.trunk_net[i](x_trunk)+self.c1t[i])
+            trunk_lin = self.trunk_net[i](x_trunk)
+            x_trunk = self.act(10*self.at[i]*trunk_lin+self.ct[i])+\
+            10*self.a1t[i]*self.act2(10*self.F1t[i]*trunk_lin+self.c1t[i])
 
             x_trunk = torch.einsum('bk,bik->bik', skip[i], x_trunk)
 
         x_branch = self.branch_net[-1](x_branch)
         x_trunk = self.trunk_net[-1](x_trunk)
 
-        B_out_reshaped = x_branch.view(-1, self.num_outputs, self.hidden_dim)   
+        B_out_reshaped = x_branch.view(-1, self.num_outputs, self.hidden_dim)
         # [Batch, num_outputs, hidden_dim]
 
         prediction = torch.einsum("bnk, bik -> bin", B_out_reshaped, x_trunk)

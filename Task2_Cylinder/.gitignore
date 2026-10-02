@@ -13,3 +13,10 @@ __pycache__/
 
 *.png
 *.pdf
+
+# output/ is ignored by the repo-root .gitignore (*/output/), which blocks
+# git from descending into it at all. Un-ignore just the directory itself so
+# the small text records (run_info.txt, rel2_history.csv) can be tracked --
+# the heavy binary artifacts in there (*.pth, *.npy, *.png) are still
+# excluded by the patterns above/at the repo root regardless.
+!output/

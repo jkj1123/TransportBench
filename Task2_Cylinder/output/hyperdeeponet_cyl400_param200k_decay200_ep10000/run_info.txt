@@ -1,0 +1,14 @@
+model=hyperdeeponet
+hidden_dim_override=44
+data_path=./cylinder_full_2400_400_seed42.pt
+epochs=10000
+batch_size=16
+lr=0.001
+lr_decay_step=200
+lr_decay_gamma=0.91
+run_tag=cyl400_param200k_decay200_ep10000
+start_time=2026-09-14 16:38:11
+num_params=196332
+end_time=2026-09-14 17:36:20
+elapsed_sec=3488.4
+best_test_loss=0.000206678

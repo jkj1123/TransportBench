@@ -1,0 +1,14 @@
+model=fusion_wbt_deeponet
+hidden_dim_override=87
+data_path=./cylinder_full_2400_400_seed42.pt
+epochs=150
+batch_size=16
+lr=0.001
+lr_decay_step=100
+lr_decay_gamma=0.91
+run_tag=smoketest_wbt
+start_time=2026-09-26 14:53:31
+num_params=100050
+end_time=2026-09-26 14:55:16
+elapsed_sec=104.3
+best_test_loss=0.0364522

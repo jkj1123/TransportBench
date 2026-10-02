@@ -1,0 +1,14 @@
+model=residual_fusion_deeponet
+hidden_dim_override=61
+data_path=./cylinder_full_2400_400_seed42.pt
+epochs=5000
+batch_size=16
+lr=0.001
+lr_decay_step=100
+lr_decay_gamma=0.91
+run_tag=cyl400_param50k_decay100
+start_time=2026-09-27 05:55:23
+num_params=49592
+end_time=2026-09-27 07:49:16
+elapsed_sec=6833.0
+best_test_loss=4.02164e-05

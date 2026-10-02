@@ -1,0 +1,14 @@
+model=cf_skip_ss_hyperdeeponet
+hidden_dim_override=102
+data_path=./cylinder_full_2400_400_seed42.pt
+epochs=500
+batch_size=16
+lr=0.001
+lr_decay_step=100
+lr_decay_gamma=0.91
+run_tag=smoketest_cfss500
+start_time=2026-09-26 15:09:16
+num_params=199969
+end_time=2026-09-26 15:12:25
+elapsed_sec=188.3
+best_test_loss=0.00933599
