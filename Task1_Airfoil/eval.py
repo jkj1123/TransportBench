@@ -16,12 +16,15 @@ from model_pt import PointTransformerONet
 from model_mscale_deeponet import MscaleDeepONet
 from model_hyperdeeponet import HyperDeepONet
 from model_hyper_mscale_deeponet import HyperMscaleDeepONet
+from model_c_hyperdeeponet import c_HyperDeepONet
+from model_fusion_deeponet import Fusion_DeepONet
+from model_residual_fusion_deeponet import Residual_Fusion_DeepONet
 from data_loader import AirfoilDataset
 
 def get_args():
     parser = argparse.ArgumentParser(description="Evaluation Script for Task I: Airfoil Flow")
     parser.add_argument('--model', type=str, required=True,
-                        choices=['deeponet', 'fno', 'unet', 'vit', 'ae', 'pt', 'mscale_deeponet', 'hyperdeeponet', 'hyper_mscale_deeponet'],
+                        choices=['deeponet', 'fno', 'unet', 'vit', 'ae', 'pt', 'mscale_deeponet', 'hyperdeeponet', 'c_hyperdeeponet', 'hyper_mscale_deeponet', 'fusion_deeponet', 'residual_fusion_deeponet'],
                         help='Choose the baseline model to evaluate')
     parser.add_argument('--data_path', type=str, default='data/airfoil_unified_128x128.pt', help='Path to dataset')
     parser.add_argument('--checkpoint', type=str, default=None, help='Path to weights (default: output/<model>/best_model.pth)')
@@ -67,9 +70,22 @@ def main():
     elif args.model == 'hyperdeeponet':
         model = HyperDeepONet(branch_dim=674, trunk_dim=2, hidden_dim=76, num_outputs=4,
                               trunk_depth=3, branch_depth=3, activation='GELU')
+    elif args.model == 'c_hyperdeeponet':
+        # 1'' config: 999,047 params (~1.00M budget), trunk [2,256,256,256,256,4], branch hidden 225
+        model = c_HyperDeepONet(branch_dim=674, trunk_dim=2, trunk_hidden_dim=256, branch_hidden_dim=225,
+                                num_outputs=4, trunk_depth=4, branch_depth=3, activation='GELU',
+                                chunk_in=1024, chunk_out=512)
     elif args.model == 'hyper_mscale_deeponet':
-        model = HyperMscaleDeepONet(branch_dim=674, trunk_dim=2, hidden_dim=36, num_outputs=4,
-                                    scales=[1, 2, 4, 8, 16], depth=4, activation='GELU')
+        model = HyperMscaleDeepONet(branch_dim=674, trunk_dim=2, hidden_dim=67, num_outputs=4,
+                                    depth=4, activation='GELU')
+    elif args.model == 'fusion_deeponet':
+        # 1,007,000 params (~1.01M budget), branch [674,253,...,253,1012], trunk [2,253,...,253,253]
+        model = Fusion_DeepONet(branch_dim=674, trunk_dim=2, hidden_dim=253, num_outputs=4,
+                                depth=5, activation='GELU')
+    elif args.model == 'residual_fusion_deeponet':
+        # Same 1,007,000 params; branch-to-trunk gate uses 1+skip (residual)
+        model = Residual_Fusion_DeepONet(branch_dim=674, trunk_dim=2, hidden_dim=253, num_outputs=4,
+                                         depth=5, activation='GELU')
 
     model = model.to(device)
     
@@ -165,9 +181,9 @@ def main():
 
     print("-" * 50)
     print(f"Final Results for {args.model.upper()}:")
-    print(f"Mean Absolute Error (MAE) : {final_mae:.5f}")
-    print(f"Mean Squared Error (MSE)  : {final_mse:.5f}")
-    print(f"Relative L2 Error         : {final_rel_l2:.5f}")
+    print(f"Mean Absolute Error (MAE) : {final_mae:.4g}")
+    print(f"Mean Squared Error (MSE)  : {final_mse:.4g}")
+    print(f"Relative L2 Error         : {final_rel_l2:.4g}")
     print("-" * 50)
 
     # 5. Generate visualizations for multiple samples and variables

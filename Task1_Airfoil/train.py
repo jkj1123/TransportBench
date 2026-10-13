@@ -1,4 +1,5 @@
 import os
+import time
 import argparse
 import random
 import torch
@@ -19,19 +20,29 @@ from model_pt import PointTransformerONet
 from model_mscale_deeponet import MscaleDeepONet
 from model_hyperdeeponet import HyperDeepONet
 from model_hyper_mscale_deeponet import HyperMscaleDeepONet
+from model_c_hyperdeeponet import c_HyperDeepONet
+from model_fusion_deeponet import Fusion_DeepONet
+from model_residual_fusion_deeponet import Residual_Fusion_DeepONet
 # Import custom Dataset
 from data_loader import AirfoilDataset
 
 def get_args():
     parser = argparse.ArgumentParser(description="TransportBench - Task I: Airfoil Flow")
     parser.add_argument('--model', type=str, required=True,
-                        choices=['deeponet', 'fno', 'unet', 'vit', 'ae', 'pt', 'mscale_deeponet', 'hyperdeeponet', 'hyper_mscale_deeponet'],
+                        choices=['deeponet', 'fno', 'unet', 'vit', 'ae', 'pt', 'mscale_deeponet', 'hyperdeeponet', 'c_hyperdeeponet', 'hyper_mscale_deeponet', 'fusion_deeponet', 'residual_fusion_deeponet'],
                         help='Choose the baseline model')
     parser.add_argument('--epochs', type=int, default=2500, help='Number of training epochs')
     parser.add_argument('--batch_size', type=int, default=32, help='Batch size')
     parser.add_argument('--lr', type=float, default=1e-3, help='Learning rate')
     parser.add_argument('--data_path', type=str, default='data/airfoil_unified_128x128.pt', help='Path to dataset')
     parser.add_argument('--save_dir', type=str, default='./checkpoints', help='Directory to save models')
+    parser.add_argument('--lr_decay_step', type=int, default=0,
+                        help='Decay LR every N epochs. 0 = disabled (paper default: no scheduler).')
+    parser.add_argument('--lr_decay_gamma', type=float, default=1.0,
+                        help='Multiplicative LR decay factor applied every --lr_decay_step epochs.')
+    parser.add_argument('--run_tag', type=str, default='',
+                        help='Optional suffix so this run writes to output/<model>_<run_tag>/ instead of '
+                             'output/<model>/ (avoids clobbering a concurrent/previous run of the same model).')
     return parser.parse_args()
 
 def main():
@@ -51,7 +62,9 @@ def main():
     print(f"Starting Task I Training | Model: {args.model.upper()} | Device: {device}")
 
     # 1. Automatically create directory for saving model weights
-    args.save_dir = os.path.join('output', args.model)
+    # (or output/<model>_<run_tag>/ if --run_tag given), aligned with Task2's convention
+    model_dir_name = f"{args.model}_{args.run_tag}" if args.run_tag else args.model
+    args.save_dir = os.path.join('output', model_dir_name)
     os.makedirs(args.save_dir, exist_ok=True)
     save_path = os.path.join(args.save_dir, f"best_model.pth")
 
@@ -103,26 +116,49 @@ def main():
     elif args.model == 'hyperdeeponet':
         model = HyperDeepONet(branch_dim=674, trunk_dim=2, hidden_dim=76, num_outputs=4,
                               trunk_depth=3, branch_depth=3, activation='GELU')
+    elif args.model == 'c_hyperdeeponet':
+        # 1'' config: 999,047 params (~1.00M budget), trunk [2,256,256,256,256,4], branch hidden 225
+        model = c_HyperDeepONet(branch_dim=674, trunk_dim=2, trunk_hidden_dim=256, branch_hidden_dim=225,
+                                num_outputs=4, trunk_depth=4, branch_depth=3, activation='GELU',
+                                chunk_in=1024, chunk_out=512)
     elif args.model == 'hyper_mscale_deeponet':
-        model = HyperMscaleDeepONet(branch_dim=674, trunk_dim=2, hidden_dim=36, num_outputs=4,
-                                    scales=[1, 2, 4, 8, 16], depth=4, activation='GELU')
+        model = HyperMscaleDeepONet(branch_dim=674, trunk_dim=2, hidden_dim=67, num_outputs=4,
+                                    depth=4, activation='GELU')
+    elif args.model == 'fusion_deeponet':
+        # 1,007,000 params (~1.01M budget), branch [674,253,...,253,1012], trunk [2,253,...,253,253]
+        model = Fusion_DeepONet(branch_dim=674, trunk_dim=2, hidden_dim=253, num_outputs=4,
+                                depth=5, activation='GELU')
+    elif args.model == 'residual_fusion_deeponet':
+        # Same 1,007,000 params; branch-to-trunk gate uses 1+skip (residual)
+        model = Residual_Fusion_DeepONet(branch_dim=674, trunk_dim=2, hidden_dim=253, num_outputs=4,
+                                         depth=5, activation='GELU')
 
     model = model.to(device)
     print(f"Model Parameters: {sum(p.numel() for p in model.parameters()) / 1e6:.2f} M")
 
     # 4. Define optimizer and loss function (Masked L1 or MSE)
     optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=1e-4)
-    # Paper: no scheduler for Tasks I-III
-    # scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=1e-6)
+    # Paper: no scheduler for Tasks I-III (opt-in override via --lr_decay_step/--lr_decay_gamma)
+    scheduler = None
+    if args.lr_decay_step > 0:
+        scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=args.lr_decay_step, gamma=args.lr_decay_gamma)
     criterion = nn.MSELoss()
 
     # ================= Core: Logic for saving the best model =================
     best_test_loss = float('inf')
     history = {'train_loss':[], 'test_loss':[]}
 
+    # Per-epoch log: epoch, wall_time_sec, test_rel2, best_test_rel2
+    best_test_rel2 = float('inf')
+    rel2_log_path = os.path.join(args.save_dir, 'rel2_history.csv')
+    with open(rel2_log_path, 'w') as f:
+        f.write('epoch,wall_time_sec,test_rel2,best_test_rel2\n')
+    train_start_time = time.time()
+
     print("Training Started...")
     pbar = tqdm(range(args.epochs), desc="Training")
     for epoch in pbar:
+        rel2_sum, rel2_count = 0.0, 0
         # --- Train Phase ---
         model.train()
         train_loss_acc = 0.0
@@ -163,7 +199,8 @@ def main():
             optimizer.step()
             train_loss_acc += loss.item()
             
-        # scheduler.step()
+        if scheduler is not None:
+            scheduler.step()
         avg_train_loss = train_loss_acc / len(train_loader)
         history['train_loss'].append(avg_train_loss)
 
@@ -200,11 +237,26 @@ def main():
                     mask = torch.stack(masks, dim=0).to(device)
 
                     loss = criterion(pred * mask, y * mask)
-                    
+
                 test_loss_acc += loss.item()
-                
+
+                # Relative L2 Error (per-sample, matching eval.py), every epoch
+                pred_masked = (pred * mask).reshape(pred.shape[0], -1)
+                y_masked = (y * mask).reshape(y.shape[0], -1)
+                per_sample_rel2 = torch.norm(pred_masked - y_masked, p=2, dim=1) / \
+                                   (torch.norm(y_masked, p=2, dim=1) + 1e-8)
+                rel2_sum += per_sample_rel2.sum().item()
+                rel2_count += pred_masked.shape[0]
+
         avg_test_loss = test_loss_acc / len(test_loader)
         history['test_loss'].append(avg_test_loss)
+
+        test_rel2 = rel2_sum / rel2_count
+        if test_rel2 < best_test_rel2:
+            best_test_rel2 = test_rel2
+        wall_time_sec = time.time() - train_start_time
+        with open(rel2_log_path, 'a') as f:
+            f.write(f'{epoch + 1},{wall_time_sec:.2f},{test_rel2:.6g},{best_test_rel2:.6g}\n')
 
         # 🌟 Core: If the current test loss is the historical minimum, overwrite and save the weights!
         if avg_test_loss < best_test_loss:
@@ -215,16 +267,21 @@ def main():
             saved_flag = ""
 
         pbar.set_postfix({
-            'train': f'{avg_train_loss:.5f}',
-            'test': f'{avg_test_loss:.5f}',
-            'best': f'{best_test_loss:.5f}',
+            'train': f'{avg_train_loss:.4g}',
+            'test': f'{avg_test_loss:.4g}',
+            'best': f'{best_test_loss:.4g}',
+            'rel2': f'{test_rel2:.4g}',
+            'best_rel2': f'{best_test_rel2:.4g}',
             'lr': f'{optimizer.param_groups[0]["lr"]:.2e}',
         })
         if saved_flag and (epoch + 1) % 50 == 0:
             print(f"  [BEST SAVED @ epoch {epoch+1}]")
 
-    print(f"Training Complete! Best Test Loss: {best_test_loss:.5f}. Model saved to {save_path}")
-    
+    total_wall_time = time.time() - train_start_time
+    print(f"Training Complete! Best Test Loss: {best_test_loss:.4g} | Best Test Rel L2: {best_test_rel2:.4g} | "
+          f"Wall Time: {total_wall_time:.1f}s. Model saved to {save_path}")
+    print(f"Per-epoch rel2/walltime log saved to {rel2_log_path}")
+
     # Save loss history for visualization plotting
     np.save(os.path.join(args.save_dir, 'history.npy'), history)
 

@@ -31,26 +31,35 @@ from model_hyperdeeponet import HyperDeepONet
 from model_L_hyperdeeponet import HyperDeepONet as L_HyperDeepONet
 from model_hyper_mscale_deeponet import HyperMscaleDeepONet
 from model_c_hyperdeeponet import c_HyperDeepONet
-from model_cf_hyperdeeponet import c_HyperDeepONet as CF_HyperDeepONet
-from model_cf_test_hyperdeeponet import cf_test_HyperDeepONet as CF_TEST_HyperDeepONet
-from model_cf_test2_hyperdeeponet import cf_test2_HyperDeepONet as CF_TEST2_HyperDeepONet
-from model_L_D_hyperdeeponet import HyperDeepONet as L_D_HyperDeepONet
-from model_LDg_hyperdeeponet import HyperDeepONet as LDg_HyperDeepONet
-from model_fusion_wbt_deeponet import Fusion_WbWt_DeepONet
+# The following model files are missing from this checkout (not restored /
+# never committed) -- importing them unconditionally broke train_fast.py for
+# EVERY model, not just the ones below. Commented out, and their --model
+# choices removed accordingly, until the files exist again.
+# from model_cf_hyperdeeponet import c_HyperDeepONet as CF_HyperDeepONet
+# from model_cf_test_hyperdeeponet import cf_test_HyperDeepONet as CF_TEST_HyperDeepONet
+# from model_cf_test2_hyperdeeponet import cf_test2_HyperDeepONet as CF_TEST2_HyperDeepONet
+# from model_L_D_hyperdeeponet import HyperDeepONet as L_D_HyperDeepONet
+# from model_LDg_hyperdeeponet import HyperDeepONet as LDg_HyperDeepONet
+# from model_fusion_wbt_deeponet import Fusion_WbWt_DeepONet
 from model_fusion_deeponet import Fusion_DeepONet
 from model_residual_fusion_deeponet import Residual_Fusion_DeepONet
-from model_w_deeponet import W_DeepONet
-from model_wm_deeponet import WM_DeepONet
-from model_whm_deeponet import WHM_DeepONet
-from model_r_deeponet import R_DeepONet
-from model_rm_deeponet import RM_DeepONet
-from model_rhm_deeponet import RHM_DeepONet
+from model_bilinear_deeponet import Bilinear_DeepONet
+# from model_w_deeponet import W_DeepONet
+# from model_wm_deeponet import WM_DeepONet
+# from model_whm_deeponet import WHM_DeepONet
+# from model_r_deeponet import R_DeepONet
+# from model_rm_deeponet import RM_DeepONet
+# from model_rhm_deeponet import RHM_DeepONet
 from data_loader_fast import CylinderDatasetFast, FastBatchIterator
 
 def get_args():
     parser = argparse.ArgumentParser(description="TransportBench - Task II: Cylinder Flow (overhead-fixed loader)")
     parser.add_argument('--model', type=str, required=True,
-                        choices=['deeponet', 'fno', 'unet', 'vit', 'ae', 'pt', 'mscale_deeponet', 'hyperdeeponet', 'L_hyperdeeponet', 'L_D_hyperdeeponet', 'LDg_hyperdeeponet', 'c_hyperdeeponet', 'cf_hyperdeeponet', 'cf_test_hyperdeeponet', 'cf_test2_hyperdeeponet', 'hyper_mscale_deeponet', 'fusion_deeponet', 'residual_fusion_deeponet', 'w_deeponet', 'wm_deeponet', 'whm_deeponet', 'r_deeponet', 'rm_deeponet', 'rhm_deeponet', 'fusion_wbt_deeponet'],
+                        choices=['deeponet', 'fno', 'unet', 'vit', 'ae', 'pt', 'mscale_deeponet', 'hyperdeeponet', 'L_hyperdeeponet', 'c_hyperdeeponet', 'hyper_mscale_deeponet', 'fusion_deeponet', 'residual_fusion_deeponet', 'bilinear_deeponet'],
+                        # 'L_D_hyperdeeponet', 'LDg_hyperdeeponet', 'cf_hyperdeeponet', 'cf_test_hyperdeeponet',
+                        # 'cf_test2_hyperdeeponet', 'w_deeponet', 'wm_deeponet', 'whm_deeponet', 'r_deeponet',
+                        # 'rm_deeponet', 'rhm_deeponet', 'fusion_wbt_deeponet' removed: their model_*.py files
+                        # are missing from this checkout (see commented-out imports above).
                         help='Choose the baseline model')
     parser.add_argument('--epochs', type=int, default=2500, help='Number of training epochs')
     parser.add_argument('--batch_size', type=int, default=16, help='Batch size')
@@ -314,6 +323,11 @@ def main():
         rfd_hidden_dim = args.hidden_dim if args.hidden_dim > 0 else 278
         model = Residual_Fusion_DeepONet(branch_dim=2, trunk_dim=2, hidden_dim=rfd_hidden_dim, num_outputs=4,
                                          depth=5, activation='GELU')
+    elif args.model == 'bilinear_deeponet':
+        # 1,010,034 params at hidden_dim=278 (same ~1M budget/tier as fusion_deeponet).
+        bl_hidden_dim = args.hidden_dim if args.hidden_dim > 0 else 278
+        model = Bilinear_DeepONet(branch_dim=2, trunk_dim=2, hidden_dim=bl_hidden_dim, num_outputs=4,
+                                  depth=5, activation='GELU')
 
     model = model.to(device)
     num_params = sum(p.numel() for p in model.parameters())

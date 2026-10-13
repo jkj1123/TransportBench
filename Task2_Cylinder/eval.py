@@ -20,12 +20,13 @@ from model_hyper_mscale_deeponet import HyperMscaleDeepONet
 from model_c_hyperdeeponet import c_HyperDeepONet
 from model_fusion_deeponet import Fusion_DeepONet
 from model_residual_fusion_deeponet import Residual_Fusion_DeepONet
+from model_bilinear_deeponet import Bilinear_DeepONet
 from data_loader import CylinderDataset
 
 def get_args():
     parser = argparse.ArgumentParser(description="Evaluation Script for Task II: Cylinder Flow")
     parser.add_argument('--model', type=str, required=True,
-                        choices=['deeponet', 'fno', 'unet', 'vit', 'ae', 'pt', 'mscale_deeponet', 'hyperdeeponet', 'L_hyperdeeponet', 'c_hyperdeeponet', 'hyper_mscale_deeponet', 'fusion_deeponet', 'residual_fusion_deeponet'],
+                        choices=['deeponet', 'fno', 'unet', 'vit', 'ae', 'pt', 'mscale_deeponet', 'hyperdeeponet', 'L_hyperdeeponet', 'c_hyperdeeponet', 'hyper_mscale_deeponet', 'fusion_deeponet', 'residual_fusion_deeponet', 'bilinear_deeponet'],
                         help='Choose the baseline model to evaluate')
     parser.add_argument('--data_path', type=str, default='./data/cylinder_full_2400.pt', help='Path to dataset')
     parser.add_argument('--checkpoint', type=str, default=None, help='Path to weights (default: output/<model>/best_model.pth)')
@@ -89,6 +90,12 @@ def main():
         # Same 1,010,034 params; branch-to-trunk gate uses 1+skip (residual)
         model = Residual_Fusion_DeepONet(branch_dim=2, trunk_dim=2, hidden_dim=278, num_outputs=4,
                                          depth=5, activation='GELU')
+    elif args.model == 'bilinear_deeponet':
+        # 1,010,034 params (~1.01M budget, same tier as fusion_deeponet) -- bilinear
+        # (einsum) branch-trunk fusion with learnable scale/shift per layer instead
+        # of additive skip fusion. See model_bilinear_deeponet.py.
+        model = Bilinear_DeepONet(branch_dim=2, trunk_dim=2, hidden_dim=278, num_outputs=4,
+                                  depth=5, activation='GELU')
 
     model = model.to(device)
 
