@@ -65,8 +65,12 @@ def main():
     log(f"=== Training {args.model.upper()} | Fourier: {use_fourier} | Device: {device} ===")
     log("Strategy: TIME-DILATED GOLDEN PROTOCOL (Peak LR @ 40%, Weights start @ Ep800)")
 
-    train_loader, test_loader, x_norm, y_norm = get_dataloader_and_stats(args.data_path, args.batch_size, device)
-    
+    train_loader, test_loader, x_norm, y_norm, vac = get_dataloader_and_stats(args.data_path, args.batch_size, device)
+    vac = vac.to(device)
+    vac_count = int((~vac).sum().item())
+    log(f"Vacuum (non-physical filler) cells excluded from loss/eval: "
+        f"{int(vac.sum().item())}/{vac.numel()}")
+
     model = build_model(args.model, use_fourier).to(device)
 
     total_params = sum(p.numel() for p in model.parameters())
@@ -83,7 +87,7 @@ def main():
         steps_per_epoch=len(train_loader), pct_start=0.4, anneal_strategy='cos'
     )
 
-    loss_fn = nn.L1Loss(reduction='none')
+    loss_fn = nn.MSELoss(reduction='none')
     best_test_loss = float('inf')
     best_test_epoch = -1
 
@@ -107,15 +111,19 @@ def main():
             optimizer.zero_grad()
             out_enc = model(x_enc)
 
-            # L1 Loss weight matrix
+            # MSE loss weight matrix with spatial curriculum
             raw_loss = loss_fn(out_enc, y_enc)
             w = torch.ones_like(raw_loss)
             w[:, :, 2, :] = w_wall      # Wall
             w[:, :, 1, :] = w_near      # Near-wall
             w[:, :, 3, :] = w_near      # Near-wall
             w[:, 3, :, :] *= w_p        # Pressure channel augmentation
+            w[:, :, vac] = 0.0          # Vacuum filler cells are not targets
 
-            loss = (raw_loss * w).mean()
+            # True weighted mean (not raw_loss.mean(), which divides by the
+            # fixed element count regardless of how much mass w actually
+            # carries -- see UPSTREAM_CHANGES_2026-10-25.md, section 3).
+            loss = (raw_loss * w).sum() / w.sum()
             loss.backward()
 
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
@@ -134,9 +142,9 @@ def main():
                 y_enc_test = y_norm.encode(y_test)
                 out_enc_test = model(x_enc_test)
                 
-                # Unweighted L1 loss for validation
-                raw_test_loss = loss_fn(out_enc_test, y_enc_test)
-                test_loss_val += raw_test_loss.mean().item()
+                # Unweighted (vacuum-masked) MSE loss for validation
+                raw_test_loss = loss_fn(out_enc_test, y_enc_test)[:, :, ~vac].mean()
+                test_loss_val += raw_test_loss.item()
                 
         test_loss_val /= len(test_loader)
 

@@ -4,7 +4,7 @@ import torch
 import numpy as np
 import matplotlib.pyplot as plt
 
-from data_loader import GaussianNormalizer
+from data_loader import MinMaxNormalizer, get_split_indices, vacuum_mask
 from model_deeponet import DeepONet2d
 from model_fno import FNO2d
 from model_unet import FluidUNet
@@ -13,11 +13,15 @@ from model_ae import AutoEncoder2d
 from model_pt import PointTransformer
 from model_mscale_deeponet import MscaleDeepONet
 from model_hyperdeeponet import HyperDeepONet
+from model_c_hyperdeeponet import c_HyperDeepONet
+from model_fusion_deeponet import Fusion_DeepONet
+from model_hyper_mscale_deeponet import HyperMscaleDeepONet
 
 def get_args():
     parser = argparse.ArgumentParser(description="Evaluation for Task 4: Double Cone Flow")
-    parser.add_argument('--model', type=str, required=True, 
-                        choices=['deeponet', 'fno', 'unet', 'vit', 'ae', 'pt', 'hyperdeeponet', 'mscale_deeponet'], 
+    parser.add_argument('--model', type=str, required=True,
+                        choices=['deeponet', 'fno', 'unet', 'vit', 'ae', 'pt', 'hyperdeeponet', 'mscale_deeponet',
+                                 'c_hyperdeeponet', 'fusion_deeponet', 'hyper_mscale_deeponet'],
                         help='Choose the model to evaluate')
     parser.add_argument('--no_fourier', action='store_true',
                         help='Model does not use Fourier encoding')
@@ -55,16 +59,25 @@ def main():
     x_data = data_full['x'].float()
     y_data = data_full['y'].float()
     
+    # Vacuum mask on RAW pressure (must run before the log10 transform below --
+    # see UPSTREAM_CHANGES_2026-10-25.md, log10(0+1e-6) is never exactly 0).
+    vac = vacuum_mask(y_data).to(device)
+
     y_data_log = y_data.clone()
     y_data_log[:, 3, :, :] = torch.log10(y_data[:, 3, :, :] + 1e-6)
-    
-    x_mean = torch.mean(x_data, dim=(0, 2, 3), keepdim=True).to(device)
-    x_std = torch.std(x_data, dim=(0, 2, 3), keepdim=True).to(device)
-    y_mean = torch.mean(y_data_log, dim=(0, 2, 3), keepdim=True).to(device)
-    y_std = torch.std(y_data_log, dim=(0, 2, 3), keepdim=True).to(device)
-    
-    x_norm = GaussianNormalizer(mean=x_mean, std=x_std)
-    y_norm = GaussianNormalizer(mean=y_mean, std=y_std)
+
+    # Train-only min-max stats (must match train.py exactly, or the loaded
+    # checkpoint's weights are evaluated against a shifted input/target space).
+    n_total = x_data.shape[0]
+    train_idx, test_idx_t = get_split_indices(n_total)
+    x_train_raw, y_train_raw = x_data[train_idx], y_data_log[train_idx]
+    x_min = torch.amin(x_train_raw, dim=(0, 2, 3), keepdim=True).to(device)
+    x_max = torch.amax(x_train_raw, dim=(0, 2, 3), keepdim=True).to(device)
+    y_min = torch.amin(y_train_raw, dim=(0, 2, 3), keepdim=True).to(device)
+    y_max = torch.amax(y_train_raw, dim=(0, 2, 3), keepdim=True).to(device)
+
+    x_norm = MinMaxNormalizer(x_min, x_max)
+    y_norm = MinMaxNormalizer(y_min, y_max)
 
     # Load model and weights
     checkpoint = torch.load(ckpt_path, map_location=device, weights_only=False)
@@ -85,23 +98,21 @@ def main():
         model = PointTransformer(in_channels=5, out_channels=4, latent_dim=512, num_latents=1024, depth=10, use_fourier=checkpoint_fourier)
     elif args.model == 'mscale_deeponet':
         model = MscaleDeepONet(branch_dim=3, trunk_dim=2, hidden_dim=195, num_outputs=4, scales=[1, 2, 4, 8, 16], depth=4, activation='GELU')
-    elif args.model == 'hyperdeeponet': 
+    elif args.model == 'hyperdeeponet':
         model = HyperDeepONet(branch_dim=3, trunk_dim=2, hidden_dim=78, num_outputs=4, trunk_depth=3, branch_depth=3, activation='GELU')
-    
+    elif args.model == 'c_hyperdeeponet':
+        model = c_HyperDeepONet(branch_dim=3, trunk_dim=2, hidden_dim=77, num_basis=100, num_outputs=4, trunk_depth=3, branch_depth=3, activation='GELU', chunk_in=100, chunk_out=4)
+    elif args.model == 'fusion_deeponet':
+        model = Fusion_DeepONet(branch_dim=3, trunk_dim=2, hidden_dim=77, num_outputs=4, depth=5, activation='Tanh')
+    elif args.model == 'hyper_mscale_deeponet':
+        model = HyperMscaleDeepONet(branch_dim=3, trunk_dim=2, hidden_dim=68, num_outputs=4, depth=4, activation='GELU')
+
     model = model.to(device)
     model.load_state_dict(checkpoint.get('model_state', checkpoint))
     model.eval()
 
     # ===== Test-set Relative L2 Error (reproduces train/test split from data_loader) =====
-    n_total = x_data.shape[0]
-    if n_total == 51:
-        n_train = 45
-    elif n_total == 32:
-        n_train = 28
-    else:
-        n_train = n_total - max(1, int(n_total * 0.1))
-    g_cpu = torch.Generator(); g_cpu.manual_seed(42)
-    test_idx = torch.randperm(n_total, generator=g_cpu)[n_train:].tolist()
+    test_idx = test_idx_t.tolist()
 
     # Three metrics on the test set:
     #  (1) encoded-space L1  -> EXACTLY train.py's "Test(Pure)" (sanity check, should match ~0.2)
@@ -116,18 +127,19 @@ def main():
             xin = x_data[i].unsqueeze(0).to(device)
             pred_enc = model(x_norm.encode(xin))                          # encoded prediction
             gt_enc = y_norm.encode(y_data_log[i].unsqueeze(0).to(device)) # encoded target
-            l1_enc += torch.abs(pred_enc - gt_enc).mean().item()          # == train.py Test(Pure)
+            l1_enc += torch.abs(pred_enc - gt_enc)[:, :, ~vac].mean().item()  # == train.py Test(Pure)
 
             gt = y_data[i].unsqueeze(0).to(device)                        # physical GT (pressure in Pa)
             pred = y_norm.decode(pred_enc).clone()
             pred[:, 3, :, :] = torch.pow(10, pred[:, 3, :, :])            # log10 -> physical pressure
             # paper Eq.(17): sqrt(sum||err||^2) / sqrt(sum||ref||^2) over ALL variables + ALL grid points
-            err_all = (pred[0] - gt[0]).reshape(-1)
-            ref_all = gt[0].reshape(-1)
+            # (vacuum/non-physical filler cells excluded)
+            err_all = (pred[0][:, ~vac] - gt[0][:, ~vac]).reshape(-1)
+            ref_all = gt[0][:, ~vac].reshape(-1)
             rel_l2_paper += (torch.linalg.norm(err_all) / (torch.linalg.norm(ref_all) + 1e-8)).item()
             for c in range(len(ch_names)):
-                num = torch.linalg.norm(pred[0, c] - gt[0, c])
-                den = torch.linalg.norm(gt[0, c]) + 1e-8
+                num = torch.linalg.norm(pred[0, c][~vac] - gt[0, c][~vac])
+                den = torch.linalg.norm(gt[0, c][~vac]) + 1e-8
                 rel_l2[c] += (num / den).item()
     rel_l2 /= len(test_idx)
     l1_enc /= len(test_idx)

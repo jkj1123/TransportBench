@@ -55,6 +55,41 @@ class AirfoilDatasetFast:
         if device != 'cpu':
             self._to(device)
 
+        self.train_min = None
+        self.train_max = None
+
+    def fit_train_normalizer(self, train_indices):
+        """Re-normalize target_all in place: undo the stored [-1,1] (full-dataset
+        stats) encoding, then min-max normalize to [0,1] using per-channel stats
+        from the TRAIN split only. Mirrors data_loader.py's
+        AirfoilDataset.fit_train_normalizer so results stay comparable to the
+        non-fast script. Call once, right after split()."""
+        self.train_min, self.train_max = {}, {}
+        train_indices = train_indices.to(self.target_all.device)
+        channel_dim = -1 if self.mode == 'deeponet' else 1
+        for i, var in enumerate(self.stats.keys()):
+            gmin, gmax = self.stats[var]['min'], self.stats[var]['max']
+            v = self.target_all.index_select(0, train_indices).select(channel_dim, i)
+            vphys = (v + 1.0) / 2.0 * (gmax - gmin) + gmin
+            tmin, tmax = vphys.min().item(), vphys.max().item()
+            self.train_min[var], self.train_max[var] = tmin, tmax
+            rng = tmax - tmin
+            rng = rng if rng > 1e-12 else 1.0
+            a = (gmax - gmin) / (2.0 * rng)
+            b = ((gmax + gmin) / 2.0 - tmin) / rng
+            if self.mode == 'deeponet':
+                self.target_all[..., i] = self.target_all[..., i] * a + b
+            else:
+                self.target_all[:, i] = self.target_all[:, i] * a + b
+        print(f"[fast] Train-only min-max normalization applied: {len(train_indices)} train samples.")
+
+    def denormalize(self, tensor, var_name):
+        """Restore [0,1] train-only normalized tensors back to physical quantities."""
+        if self.train_min is None:
+            raise RuntimeError("fit_train_normalizer() must be called before denormalize()")
+        _min, _max = self.train_min[var_name], self.train_max[var_name]
+        return tensor * (_max - _min) + _min
+
     def _to(self, device):
         self.geo_mask_flat = self.geo_mask_flat.to(device)
         if self.mode == 'deeponet':

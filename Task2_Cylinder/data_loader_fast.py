@@ -35,7 +35,25 @@ class CylinderDatasetFast:
 
         self.n_samples = flow_label.shape[0]
         self.H, self.W = flow_label.shape[1], flow_label.shape[2]
-        print(f"[fast] Data loaded. Samples: {self.n_samples}, Grid: {self.H}x{self.W}")
+
+        # Fluid points (outside cylinder), shared grid: [H*W] bool, True where
+        # EVERY sample marks fluid. Cylinder-interior cells are non-physical
+        # fillers, excluded from training/val loss (same idea as upstream
+        # ZweigGit/TransportBench; see UPSTREAM_CHANGES_2026-10-25.md).
+        #
+        # NOTE: upstream's own fluid_mask uses `mask >= 0.5` ("True where every
+        # sample marks fluid"), but verified directly against this exact .pt file:
+        # mask>0.5 is only 1.53% of pixels and is EXACTLY 0 with ZERO cross-sample
+        # variance there (the hallmark of the non-physical cylinder-interior
+        # filler) -- real, varying CFD values live in the mask<=0.5 (98.47%)
+        # region. Upstream's condition looks inverted from its own stated intent;
+        # using the verified-correct direction here instead.
+        self.fluid_mask = (mask[:, 0] <= 0.5).all(dim=0).reshape(-1)
+        print(f"[fast] Data loaded. Samples: {self.n_samples}, Grid: {self.H}x{self.W}, "
+              f"Fluid points: {self.fluid_mask.sum().item()}/{self.fluid_mask.numel()}")
+
+        self.train_min = None
+        self.train_max = None
 
         if self.mode == 'deeponet':
             # Branch input: (Kn, Ma) per sample -- already [N, 2], nothing to precompute.
@@ -65,6 +83,7 @@ class CylinderDatasetFast:
             self._to(device)
 
     def _to(self, device):
+        self.fluid_mask = self.fluid_mask.to(device)
         if self.mode == 'deeponet':
             self.branch_all = self.branch_all.to(device)
             self.trunk_shared = self.trunk_shared.to(device)
@@ -72,6 +91,38 @@ class CylinderDatasetFast:
         else:
             self.x_input_all = self.x_input_all.to(device)
             self.target_all = self.target_all.to(device)
+
+    def fit_train_normalizer(self, train_indices):
+        """Re-normalize target_all in place: undo the stored [-1,1] (full-dataset
+        stats) encoding, then min-max normalize to [0,1] using per-channel stats
+        from the TRAIN split only. Mirrors data_loader.py's
+        CylinderDataset.fit_train_normalizer so results stay comparable to the
+        non-fast script. Call once, right after split()."""
+        self.train_min, self.train_max = {}, {}
+        train_indices = train_indices.to(self.target_all.device)
+        channel_dim = -1 if self.mode in ('deeponet', 'point') else 1
+        for i, var in enumerate(self.stats.keys()):
+            gmin, gmax = self.stats[var]['min'], self.stats[var]['max']
+            v = self.target_all.index_select(0, train_indices).select(channel_dim, i)
+            vphys = (v + 1.0) / 2.0 * (gmax - gmin) + gmin
+            tmin, tmax = vphys.min().item(), vphys.max().item()
+            self.train_min[var], self.train_max[var] = tmin, tmax
+            rng = tmax - tmin
+            rng = rng if rng > 1e-12 else 1.0
+            a = (gmax - gmin) / (2.0 * rng)
+            b = ((gmax + gmin) / 2.0 - tmin) / rng
+            if channel_dim == -1:
+                self.target_all[..., i] = self.target_all[..., i] * a + b
+            else:
+                self.target_all[:, i] = self.target_all[:, i] * a + b
+        print(f"[fast] Train-only min-max normalization applied: {len(train_indices)} train samples.")
+
+    def denormalize(self, tensor, var_name):
+        """Restore [0,1] train-only normalized tensors back to physical quantities."""
+        if self.train_min is None:
+            raise RuntimeError("fit_train_normalizer() must be called before denormalize()")
+        _min, _max = self.train_min[var_name], self.train_max[var_name]
+        return tensor * (_max - _min) + _min
 
     def split(self, train_ratio=0.8, seed=42):
         """Reproduces torch.utils.data.random_split(..., generator=Generator().manual_seed(seed))

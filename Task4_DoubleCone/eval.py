@@ -4,7 +4,7 @@ import torch
 import numpy as np
 import matplotlib.pyplot as plt
 
-from data_loader import GaussianNormalizer
+from data_loader import MinMaxNormalizer, get_split_indices, vacuum_mask
 from model_deeponet import DeepONet2d
 from model_fno import FNO2d
 from model_unet import FluidUNet
@@ -58,17 +58,26 @@ def main():
     data_full = torch.load(args.data_path, weights_only=False)
     x_data = data_full['x'].float()
     y_data = data_full['y'].float()
-    
+
+    # Vacuum mask on RAW pressure (must run before the log10 transform below --
+    # see UPSTREAM_CHANGES_2026-10-25.md, log10(0+1e-6) is never exactly 0).
+    vac = vacuum_mask(y_data).to(device)
+
     y_data_log = y_data.clone()
     y_data_log[:, 3, :, :] = torch.log10(y_data[:, 3, :, :] + 1e-6)
-    
-    x_mean = torch.mean(x_data, dim=(0, 2, 3), keepdim=True).to(device)
-    x_std = torch.std(x_data, dim=(0, 2, 3), keepdim=True).to(device)
-    y_mean = torch.mean(y_data_log, dim=(0, 2, 3), keepdim=True).to(device)
-    y_std = torch.std(y_data_log, dim=(0, 2, 3), keepdim=True).to(device)
-    
-    x_norm = GaussianNormalizer(mean=x_mean, std=x_std)
-    y_norm = GaussianNormalizer(mean=y_mean, std=y_std)
+
+    # Train-only min-max stats (must match train.py exactly, or the loaded
+    # checkpoint's weights are evaluated against a shifted input/target space).
+    n_total = x_data.shape[0]
+    train_idx, test_idx_t = get_split_indices(n_total)
+    x_train_raw, y_train_raw = x_data[train_idx], y_data_log[train_idx]
+    x_min = torch.amin(x_train_raw, dim=(0, 2, 3), keepdim=True).to(device)
+    x_max = torch.amax(x_train_raw, dim=(0, 2, 3), keepdim=True).to(device)
+    y_min = torch.amin(y_train_raw, dim=(0, 2, 3), keepdim=True).to(device)
+    y_max = torch.amax(y_train_raw, dim=(0, 2, 3), keepdim=True).to(device)
+
+    x_norm = MinMaxNormalizer(x_min, x_max)
+    y_norm = MinMaxNormalizer(y_min, y_max)
 
     # Load model and weights
     checkpoint = torch.load(ckpt_path, map_location=device, weights_only=False)
@@ -103,18 +112,12 @@ def main():
     model.eval()
 
     # ===== Test-set Relative L2 Error (reproduces train/test split from data_loader) =====
-    n_total = x_data.shape[0]
-    if n_total == 51:
-        n_train = 45
-    elif n_total == 32:
-        n_train = 28
-    else:
-        n_train = n_total - max(1, int(n_total * 0.1))
-    g_cpu = torch.Generator(); g_cpu.manual_seed(42)
-    test_idx = torch.randperm(n_total, generator=g_cpu)[n_train:].tolist()
+    test_idx = test_idx_t.tolist()
+    valid2d = (~vac).cpu().numpy()
 
     # Computed like the README "Pressure Field Rel L2": PHYSICAL space,
     # pressure decoded back from log10 via pow10. The 'p' channel is the README metric.
+    # Vacuum (non-physical filler) cells are excluded from the norm.
     ch_names = ['rho', 'u', 'v', 'p']
     rel_l2 = torch.zeros(len(ch_names))
     with torch.no_grad():
@@ -125,8 +128,8 @@ def main():
             pred = pred_log.clone()
             pred[:, 3, :, :] = torch.pow(10, pred_log[:, 3, :, :])   # log10 -> physical pressure
             for c in range(len(ch_names)):
-                num = torch.linalg.norm(pred[0, c] - gt[0, c])
-                den = torch.linalg.norm(gt[0, c]) + 1e-8
+                num = torch.linalg.norm(pred[0, c][~vac] - gt[0, c][~vac])
+                den = torch.linalg.norm(gt[0, c][~vac]) + 1e-8
                 rel_l2[c] += (num / den).item()
     rel_l2 /= len(test_idx)
 

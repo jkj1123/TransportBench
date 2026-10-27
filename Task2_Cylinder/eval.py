@@ -49,7 +49,8 @@ def main():
     dataset = CylinderDataset(args.data_path, mode=data_mode)
     train_size = int(0.8 * len(dataset))
     test_size = len(dataset) - train_size
-    _, test_data = random_split(dataset, [train_size, test_size], generator=torch.Generator().manual_seed(42))
+    train_data, test_data = random_split(dataset, [train_size, test_size], generator=torch.Generator().manual_seed(42))
+    dataset.fit_train_normalizer(train_data.indices)
     test_loader = DataLoader(test_data, batch_size=1, shuffle=False)
 
     # 2. Initialize model
@@ -123,20 +124,29 @@ def main():
     # Load full dataset for cylinder mask (visualization only)
     full_dataset = CylinderDataset(args.data_path, mode='grid')
 
+    # Fluid-only metrics: exclude cylinder-interior filler points (same
+    # protocol as the training loss)
+    fluid = dataset.fluid_mask.to(device)            # [H*W] bool
+    n_fluid = int(fluid.sum().item())
+    fluid_2d = fluid.view(GRID_H, GRID_W)
+    print(f"Fluid-only metrics: {n_fluid}/{fluid.numel()} points")
+
     with torch.no_grad():
         for i, batch in enumerate(test_loader):
             if data_mode == 'grid':
                 x, y = batch[0].to(device), batch[1].to(device)
                 pred = model(x)
+                y_m, pred_m = y[:, :, fluid_2d], pred[:, :, fluid_2d]
             else:
                 x_branch, x_trunk, y = batch[0].to(device), batch[1].to(device), batch[2].to(device)
                 x_branch = x_branch[:, :2]
                 x_trunk = x_trunk[0]
                 pred = model(x_branch, x_trunk)
+                y_m, pred_m = y[:, fluid], pred[:, fluid]
 
-            total_mae += criterion_mae(pred, y).item()
-            total_mse += criterion_mse(pred, y).item()
-            l2_err = torch.norm(pred - y, p=2) / (torch.norm(y, p=2) + 1e-8)
+            total_mae += criterion_mae(pred_m, y_m).item()
+            total_mse += criterion_mse(pred_m, y_m).item()
+            l2_err = torch.norm(pred_m - y_m, p=2) / (torch.norm(y_m, p=2) + 1e-8)
             total_l2_error += l2_err.item()
 
             # Collect samples for visualization
@@ -159,7 +169,7 @@ def main():
                 })
 
     num_samples = len(test_loader.dataset)
-    num_elements = num_samples * np.prod(y.shape[1:])
+    num_elements = num_samples * n_fluid * 4
 
     final_mae = total_mae / num_elements
     final_mse = total_mse / num_elements

@@ -1,0 +1,14 @@
+model=fusion_gabor_fixed_deeponet
+hidden_dim_override=39
+data_path=./cylinder_full_2400_400_seed42.pt
+epochs=5000
+batch_size=16
+lr=0.001
+lr_decay_step=100
+lr_decay_gamma=0.91
+run_tag=cyl400_param20k_decay100
+start_time=2026-10-26 16:25:56
+num_params=20514
+end_time=2026-10-26 17:36:04
+elapsed_sec=4207.9
+best_test_loss=0.000337826

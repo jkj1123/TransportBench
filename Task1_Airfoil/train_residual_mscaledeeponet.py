@@ -62,6 +62,10 @@ def main():
     dataset = AirfoilDatasetFast(args.data_path, mode='deeponet', device=device)
     train_idx, test_idx = dataset.split(train_ratio=0.8, seed=42)
     train_idx, test_idx = train_idx.to(device), test_idx.to(device)
+    # Train-only [0,1] renormalization (matches upstream ZweigGit/TransportBench
+    # fit_train_normalizer; see UPSTREAM_CHANGES_2026-10-25.md). Must happen
+    # BEFORE the mean/residual computation below.
+    dataset.fit_train_normalizer(train_idx)
 
     target_train = dataset.target_all[train_idx]
     mask_train = dataset.geo_mask_flat[train_idx]
@@ -71,10 +75,25 @@ def main():
     residual_all = dataset.target_all - mean_field_flat.unsqueeze(0)
 
     residual_train_masked = residual_all[train_idx] * mask_train
-    std_c = residual_train_masked.std(dim=(0, 1), keepdim=True) + 1e-8
-    print(f"residual per-channel std (train, normalize_constant): {std_c.flatten().tolist()}")
+    # [-1,1] min-max normalization (per-channel, masked TRAIN residual only --
+    # no test leakage). Replaces a global-std z-score: that left the regression
+    # target extremely heavy-tailed (train pixels up to ~29 std from zero, since
+    # the shock-front residual is a rare, large-magnitude outlier against an
+    # otherwise near-zero bulk), which let 'predict ~0 everywhere' become a
+    # deceptively stable trivial minimum under plain MSE + weight_decay (observed
+    # as rel2(resid) pinned at exactly 1.0 for the full 5000-epoch budget). Bounding
+    # the target to [-1,1] removes that outlier domination; verified empirically to
+    # unstick training (rel2 dropping below 1.0 within single-digit epochs instead
+    # of staying frozen at 1.0 for thousands).
+    mask_train_bool = mask_train.expand_as(residual_train_masked) > 0
+    min_c = torch.stack([residual_train_masked[..., c][mask_train_bool[..., c]].min()
+                         for c in range(residual_train_masked.shape[-1])]).view(1, 1, -1)
+    max_c = torch.stack([residual_train_masked[..., c][mask_train_bool[..., c]].max()
+                         for c in range(residual_train_masked.shape[-1])]).view(1, 1, -1)
+    range_c = (max_c - min_c).clamp(min=1e-8)
+    print(f"residual per-channel train min/max: min={min_c.flatten().tolist()} max={max_c.flatten().tolist()}")
 
-    residual_norm_all = residual_all / std_c
+    residual_norm_all = 2.0 * (residual_all - min_c) / range_c - 1.0
 
     train_tensors = (dataset.branch_all[train_idx], dataset.trunk_all[train_idx],
                       residual_norm_all[train_idx], dataset.geo_mask_flat[train_idx])
@@ -137,7 +156,7 @@ def main():
                 loss = criterion(pred * mask, y * mask)
                 test_loss_acc += loss.item()
 
-                pred_phys = pred * std_c
+                pred_phys = (pred + 1.0) / 2.0 * range_c + min_c
                 pred_masked = (pred_phys * mask).reshape(pred.shape[0], -1)
                 y_masked = (y_raw * mask).reshape(y_raw.shape[0], -1)
                 per_sample_rel2 = torch.norm(pred_masked - y_masked, p=2, dim=1) / \
@@ -159,7 +178,8 @@ def main():
             torch.save({
                 'model_state_dict': model.state_dict(),
                 'mean_field_flat': mean_field_flat.cpu(),
-                'std_c': std_c.cpu(),
+                'min_c': min_c.cpu(),
+                'max_c': max_c.cpu(),
                 'hidden_dim': args.hidden_dim,
             }, save_path)
 

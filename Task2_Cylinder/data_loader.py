@@ -20,7 +20,18 @@ class CylinderDataset(Dataset):
         
         self.n_samples = self.flow_label.shape[0]
         self.H, self.W = self.flow_label.shape[1], self.flow_label.shape[2]
-        print(f"Data loaded. Samples: {self.n_samples}, Grid: {self.H}x{self.W}")
+        self.train_min = None
+        self.train_max = None
+
+        # Fluid points (outside cylinder), shared grid: [H*W] bool, True where
+        # EVERY sample marks fluid. Cylinder-interior cells are non-physical
+        # fillers, excluded from training/val loss. Verified directly against
+        # this .pt file: mask>0.5 (1.53% of pixels) is EXACTLY 0 with ZERO
+        # cross-sample variance (non-physical filler); real varying CFD values
+        # live in mask<=0.5 (98.47%) -- hence the `<= 0.5` direction here.
+        self.fluid_mask = (self.mask[:, 0] <= 0.5).all(dim=0).reshape(-1)
+        print(f"Data loaded. Samples: {self.n_samples}, Grid: {self.H}x{self.W}, "
+              f"Fluid points: {self.fluid_mask.sum().item()}/{self.fluid_mask.numel()}")
 
     def __len__(self):
         return self.n_samples
@@ -50,8 +61,28 @@ class CylinderDataset(Dataset):
             target_flat = target.permute(1, 2, 0).reshape(-1, 4)  # [H*W, 4]
             return x_input, target_flat
 
+    def fit_train_normalizer(self, train_indices):
+        """Re-normalize flow_label in place: un-normalize stored [-1,1] (full-data
+        stats), then min-max normalize to [0,1] with per-channel stats from TRAIN
+        split only."""
+        self.train_min, self.train_max = {}, {}
+        for i, var in enumerate(self.stats.keys()):
+            gmin, gmax = self.stats[var]['min'], self.stats[var]['max']
+            v = self.flow_label[train_indices][..., i]  # (T, H, W) stored in [-1,1]
+            vphys = (v + 1.0) / 2.0 * (gmax - gmin) + gmin
+            tmin, tmax = vphys.min(), vphys.max()
+            self.train_min[var], self.train_max[var] = float(tmin), float(tmax)
+            rng = tmax - tmin
+            rng = rng if rng > 1e-12 else 1.0
+            # affine from stored z in [-1,1] to train-only [0,1]: v2 = a*z + b
+            a = (gmax - gmin) / (2.0 * rng)
+            b = ((gmax + gmin) / 2.0 - tmin) / rng
+            self.flow_label[..., i] = self.flow_label[..., i] * a + b
+        print(f"Train-only min-max normalization applied: {len(train_indices)} train samples.")
+
     def denormalize(self, tensor, var_name):
-        """Denormalize from [-1, 1] to physical values"""
-        stat = self.stats[var_name]
-        _min, _max = stat['min'], stat['max']
-        return (tensor + 1.0) / 2.0 * (_max - _min) + _min
+        """Denormalize from [0,1] train-only normalized tensors to physical values"""
+        if self.train_min is None:
+            raise RuntimeError("fit_train_normalizer() must be called before denormalize()")
+        _min, _max = self.train_min[var_name], self.train_max[var_name]
+        return tensor * (_max - _min) + _min

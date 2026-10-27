@@ -1,0 +1,6 @@
+rank,model_key,model_label,best_model_rel_l2,best_model_mae,best_model_mse
+1,residual_fusion_deeponet,Residual-Fusion DeepONet,0.02637,0.01201,0.0002781
+2,hyper_mscale_deeponet,Hyper-MscaleDeepONet,0.02715,0.01229,0.0002957
+3,hyperdeeponet_lrdecay,HyperDeepONet (LR decay),0.02745,0.01229,0.0003023
+4,hyperdeeponet,HyperDeepONet,0.02748,0.01236,0.000303
+5,deeponet,DeepONet,0.04494,0.01627,0.0008076

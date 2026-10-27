@@ -19,12 +19,13 @@ from model_hyper_mscale_deeponet import HyperMscaleDeepONet
 from model_c_hyperdeeponet import c_HyperDeepONet
 from model_fusion_deeponet import Fusion_DeepONet
 from model_residual_fusion_deeponet import Residual_Fusion_DeepONet
+from model_wavelet_deeponet import WaveletDeepONet
 from data_loader import AirfoilDataset
 
 def get_args():
     parser = argparse.ArgumentParser(description="Evaluation Script for Task I: Airfoil Flow")
     parser.add_argument('--model', type=str, required=True,
-                        choices=['deeponet', 'fno', 'unet', 'vit', 'ae', 'pt', 'mscale_deeponet', 'hyperdeeponet', 'c_hyperdeeponet', 'hyper_mscale_deeponet', 'fusion_deeponet', 'residual_fusion_deeponet'],
+                        choices=['deeponet', 'fno', 'unet', 'vit', 'ae', 'pt', 'mscale_deeponet', 'hyperdeeponet', 'c_hyperdeeponet', 'hyper_mscale_deeponet', 'fusion_deeponet', 'residual_fusion_deeponet', 'wavelet_deeponet'],
                         help='Choose the baseline model to evaluate')
     parser.add_argument('--data_path', type=str, default='data/airfoil_unified_128x128.pt', help='Path to dataset')
     parser.add_argument('--checkpoint', type=str, default=None, help='Path to weights (default: output/<model>/best_model.pth)')
@@ -48,7 +49,8 @@ def main():
     train_size = int(0.8 * len(dataset))
     test_size = len(dataset) - train_size
     # Must ensure the same manual_seed to maintain consistency between train and test splits
-    _, test_data = random_split(dataset,[train_size, test_size], generator=torch.Generator().manual_seed(42))
+    train_data, test_data = random_split(dataset,[train_size, test_size], generator=torch.Generator().manual_seed(42))
+    dataset.fit_train_normalizer(train_data.indices)
     test_loader = DataLoader(test_data, batch_size=1, shuffle=False)
 
     # 2. Initialize model
@@ -86,6 +88,10 @@ def main():
         # Same 1,007,000 params; branch-to-trunk gate uses 1+skip (residual)
         model = Residual_Fusion_DeepONet(branch_dim=674, trunk_dim=2, hidden_dim=253, num_outputs=4,
                                          depth=5, activation='GELU')
+    elif args.model == 'wavelet_deeponet':
+        # 980,728 params (~1M budget), complex Gabor-wavelet trunk (fixed w0/s0=1.0)
+        model = WaveletDeepONet(branch_dim=674, trunk_dim=2, branch_hidden=300, trunk_hidden=192,
+                                branch_depth=5, trunk_depth=5, basis_size=192, num_outputs=4)
 
     model = model.to(device)
     
@@ -116,6 +122,10 @@ def main():
         full_dataset = AirfoilDataset(args.data_path, mode='fno')  # Use 'fno' mode to get masks
         test_indices = test_loader.dataset.indices  # Get test set indices
 
+    # Fluid-element accumulator: per-sample geometry masks differ (100 airfoil
+    # shapes), so the MAE/MSE denominator is the summed fluid count, not a constant
+    total_fluid = 0.0
+
     with torch.no_grad():
         for i, batch in enumerate(test_loader):
             if data_mode == 'fno':
@@ -140,6 +150,7 @@ def main():
                 mask = mask_2d.view(1, -1, 1)  # [1, 16384, 1]
 
             # Apply mask
+            total_fluid += mask.sum().item()
             pred_masked = pred * mask
             y_masked = y * mask
 
@@ -173,7 +184,9 @@ def main():
                 })
 
     num_samples = len(test_loader.dataset)
-    num_elements = num_samples * np.prod(y_masked.shape[1:]) # Total number of elements
+    # Fluid-only element count: total fluid points kept by the masks, x 4 channels
+    num_elements = total_fluid * 4
+    print(f"Fluid-only metrics: {int(total_fluid)} points over {num_samples} samples")
     
     final_mae = total_mae / num_elements
     final_mse = total_mse / num_elements

@@ -38,12 +38,13 @@ from model_hyper_mscale_deeponet import HyperMscaleDeepONet
 from model_c_hyperdeeponet import c_HyperDeepONet
 from model_fusion_deeponet import Fusion_DeepONet
 from model_residual_fusion_deeponet import Residual_Fusion_DeepONet
+from model_wavelet_deeponet import WaveletDeepONet
 from data_loader_fast import AirfoilDatasetFast, FastBatchIterator
 
 def get_args():
     parser = argparse.ArgumentParser(description="TransportBench - Task I: Airfoil Flow (overhead-fixed loader)")
     parser.add_argument('--model', type=str, required=True,
-                        choices=['deeponet', 'fno', 'unet', 'vit', 'ae', 'pt', 'mscale_deeponet', 'hyperdeeponet', 'c_hyperdeeponet', 'hyper_mscale_deeponet', 'fusion_deeponet', 'residual_fusion_deeponet'],
+                        choices=['deeponet', 'fno', 'unet', 'vit', 'ae', 'pt', 'mscale_deeponet', 'hyperdeeponet', 'c_hyperdeeponet', 'hyper_mscale_deeponet', 'fusion_deeponet', 'residual_fusion_deeponet', 'wavelet_deeponet'],
                         help='Choose the baseline model')
     parser.add_argument('--epochs', type=int, default=2500, help='Number of training epochs')
     parser.add_argument('--batch_size', type=int, default=32, help='Batch size')
@@ -87,6 +88,11 @@ def main():
     dataset = AirfoilDatasetFast(args.data_path, mode=data_mode, device=device)
     train_idx, test_idx = dataset.split(train_ratio=0.8, seed=42)
     train_idx, test_idx = train_idx.to(device), test_idx.to(device)
+    # Train-only [0,1] renormalization (matches upstream ZweigGit/TransportBench
+    # fit_train_normalizer; see UPSTREAM_CHANGES_2026-10-25.md -- this shifts
+    # reported rel-L2 for Task1/Task2 by roughly -40~50%, it is a metric change,
+    # not a model-quality change).
+    dataset.fit_train_normalizer(train_idx)
 
     if data_mode == 'fno':
         train_tensors = (dataset.x_input_all[train_idx], dataset.target_all[train_idx])
@@ -133,6 +139,10 @@ def main():
     elif args.model == 'residual_fusion_deeponet':
         model = Residual_Fusion_DeepONet(branch_dim=674, trunk_dim=2, hidden_dim=253, num_outputs=4,
                                          depth=5, activation='GELU')
+    elif args.model == 'wavelet_deeponet':
+        # 980,728 params (~1M budget), complex Gabor-wavelet trunk (fixed w0/s0=1.0).
+        model = WaveletDeepONet(branch_dim=674, trunk_dim=2, branch_hidden=300, trunk_hidden=192,
+                                branch_depth=5, trunk_depth=5, basis_size=192, num_outputs=4)
 
     model = model.to(device)
     print(f"Model Parameters: {sum(p.numel() for p in model.parameters()) / 1e6:.2f} M")

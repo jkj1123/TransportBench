@@ -44,6 +44,10 @@ from model_c_hyperdeeponet import c_HyperDeepONet
 from model_fusion_deeponet import Fusion_DeepONet
 from model_residual_fusion_deeponet import Residual_Fusion_DeepONet
 from model_bilinear_deeponet import Bilinear_DeepONet
+from model_bilinear_fusion_deeponet import Bilinear_Fusion_DeepONet
+from model_wavelet_deeponet import WaveletDeepONet
+from model_fusion_garbor_deeponet import Fusion_DeepONet as Fusion_Gabor_DeepONet
+from model_fusion_garbor_fixed_deeponet import Fusion_DeepONet as Fusion_Gabor_Fixed_DeepONet
 # from model_w_deeponet import W_DeepONet
 # from model_wm_deeponet import WM_DeepONet
 # from model_whm_deeponet import WHM_DeepONet
@@ -55,7 +59,7 @@ from data_loader_fast import CylinderDatasetFast, FastBatchIterator
 def get_args():
     parser = argparse.ArgumentParser(description="TransportBench - Task II: Cylinder Flow (overhead-fixed loader)")
     parser.add_argument('--model', type=str, required=True,
-                        choices=['deeponet', 'fno', 'unet', 'vit', 'ae', 'pt', 'mscale_deeponet', 'hyperdeeponet', 'L_hyperdeeponet', 'c_hyperdeeponet', 'hyper_mscale_deeponet', 'fusion_deeponet', 'residual_fusion_deeponet', 'bilinear_deeponet'],
+                        choices=['deeponet', 'fno', 'unet', 'vit', 'ae', 'pt', 'mscale_deeponet', 'hyperdeeponet', 'L_hyperdeeponet', 'c_hyperdeeponet', 'hyper_mscale_deeponet', 'fusion_deeponet', 'residual_fusion_deeponet', 'bilinear_deeponet', 'bilinear_fusion_deeponet', 'wavelet_deeponet', 'fusion_gabor_deeponet', 'fusion_gabor_fixed_deeponet'],
                         # 'L_D_hyperdeeponet', 'LDg_hyperdeeponet', 'cf_hyperdeeponet', 'cf_test_hyperdeeponet',
                         # 'cf_test2_hyperdeeponet', 'w_deeponet', 'wm_deeponet', 'whm_deeponet', 'r_deeponet',
                         # 'rm_deeponet', 'rhm_deeponet', 'fusion_wbt_deeponet' removed: their model_*.py files
@@ -164,6 +168,14 @@ def main():
     dataset = CylinderDatasetFast(args.data_path, mode=data_mode, device=device)
     train_idx, test_idx = dataset.split(train_ratio=0.8, seed=42)
     train_idx, test_idx = train_idx.to(device), test_idx.to(device)
+    # Train-only [0,1] renormalization (matches upstream ZweigGit/TransportBench
+    # fit_train_normalizer; see UPSTREAM_CHANGES_2026-10-25.md -- this shifts
+    # reported rel-L2 by roughly -40~50%, it is a metric change, not a model-quality change).
+    dataset.fit_train_normalizer(train_idx)
+    # Fluid-only points (cylinder interior excluded, matches upstream): [H*W] bool,
+    # 2D view used to index [B, C, H, W] grid-mode tensors.
+    fluid = dataset.fluid_mask
+    fluid_2d = fluid.view(dataset.H, dataset.W)
 
     if data_mode == 'grid':
         train_tensors = (dataset.x_input_all[train_idx], dataset.target_all[train_idx])
@@ -328,6 +340,31 @@ def main():
         bl_hidden_dim = args.hidden_dim if args.hidden_dim > 0 else 278
         model = Bilinear_DeepONet(branch_dim=2, trunk_dim=2, hidden_dim=bl_hidden_dim, num_outputs=4,
                                   depth=5, activation='GELU')
+    elif args.model == 'bilinear_fusion_deeponet':
+        blf_hidden_dim = args.hidden_dim if args.hidden_dim > 0 else 278
+        model = Bilinear_Fusion_DeepONet(branch_dim=2, trunk_dim=2, hidden_dim=blf_hidden_dim, num_outputs=4,
+                                         depth=5, activation='GELU')
+    elif args.model == 'wavelet_deeponet':
+        # hidden_dim overrides branch_hidden=trunk_hidden=basis_size together;
+        # 46 -> 19,738 params (~20K budget), depth=3/3.
+        wv_hidden_dim = args.hidden_dim if args.hidden_dim > 0 else 192
+        model = WaveletDeepONet(branch_dim=2, trunk_dim=2, branch_hidden=wv_hidden_dim,
+                                trunk_hidden=wv_hidden_dim, branch_depth=3, trunk_depth=3,
+                                basis_size=wv_hidden_dim, num_outputs=4)
+    elif args.model == 'fusion_gabor_deeponet':
+        # 39 -> 20,534 params (~20K budget), depth=5. Real-valued Gabor
+        # activation (learnable layerwise w,s) in place of GELU+sin.
+        fg_hidden_dim = args.hidden_dim if args.hidden_dim > 0 else 278
+        model = Fusion_Gabor_DeepONet(branch_dim=2, trunk_dim=2, hidden_dim=fg_hidden_dim,
+                                      num_outputs=4, depth=5)
+    elif args.model == 'fusion_gabor_fixed_deeponet':
+        # Ablation of fusion_gabor_deeponet: same Gabor activation, but w/s are
+        # FIXED (w0=1.0, s0=1.0), not learned. Same hidden_dim=39 for a direct
+        # apples-to-apples param-count comparison (20,534 - 20 fixed-out
+        # scalars = 20,514 params).
+        fgf_hidden_dim = args.hidden_dim if args.hidden_dim > 0 else 278
+        model = Fusion_Gabor_Fixed_DeepONet(branch_dim=2, trunk_dim=2, hidden_dim=fgf_hidden_dim,
+                                            num_outputs=4, depth=5)
 
     model = model.to(device)
     num_params = sum(p.numel() for p in model.parameters())
@@ -358,13 +395,14 @@ def main():
             if data_mode == 'grid':
                 x, y = batch
                 pred = model(x)
+                loss = criterion(pred[:, :, fluid_2d], y[:, :, fluid_2d])
             else:
                 x_branch, y = batch
                 x_branch = x_branch[:, :2]  # (Kn, Ma)
                 x_trunk = dataset.trunk_shared  # all samples share the same grid
                 pred = model(x_branch, x_trunk)
+                loss = criterion(pred[:, fluid], y[:, fluid])
 
-            loss = criterion(pred, y)
             loss.backward()
             optimizer.step()
             train_loss_acc += loss.item()
@@ -386,19 +424,24 @@ def main():
                 if data_mode == 'grid':
                     x, y = batch
                     pred = model(x)
+                    loss = criterion(pred[:, :, fluid_2d], y[:, :, fluid_2d])
                 else:
                     x_branch, y = batch
                     x_branch = x_branch[:, :2]
                     x_trunk = dataset.trunk_shared
                     pred = model(x_branch, x_trunk)
+                    loss = criterion(pred[:, fluid], y[:, fluid])
 
-                loss = criterion(pred, y)
                 test_loss_acc += loss.item()
 
-                # Relative L2 Error (per-sample), only on log epochs
+                # Relative L2 Error (per-sample), only on log epochs, fluid-only
                 if compute_rel2:
-                    pred_flat = pred.reshape(pred.shape[0], -1)
-                    y_flat = y.reshape(y.shape[0], -1)
+                    if data_mode == 'grid':
+                        pred_f, y_f = pred[:, :, fluid_2d], y[:, :, fluid_2d]
+                    else:
+                        pred_f, y_f = pred[:, fluid], y[:, fluid]
+                    pred_flat = pred_f.reshape(pred_f.shape[0], -1)
+                    y_flat = y_f.reshape(y_f.shape[0], -1)
                     per_sample_rel2 = torch.norm(pred_flat - y_flat, p=2, dim=1) / \
                                        (torch.norm(y_flat, p=2, dim=1) + 1e-8)
                     rel2_sum += per_sample_rel2.sum().item()

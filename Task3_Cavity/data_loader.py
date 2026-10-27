@@ -83,18 +83,18 @@ class CavityDataset(Dataset):
         self.inputs = np.stack(input_list, axis=0)      # (99, 50, 50, 3)
         self.targets = np.stack(target_list, axis=0)    # (99, 50, 50, 10)
 
-        self.target_mean = np.mean(self.targets, axis=(0,1,2))
-        self.target_std = np.std(self.targets, axis=(0,1,2)) + 1e-6
-
-        self.targets_norm = (self.targets - self.target_mean) / self.target_std
-
         kn_min, kn_max = 0.02, 1.0
         self.inputs[..., 0] = (self.inputs[..., 0] - kn_min) / (kn_max - kn_min)
 
         self.inputs_tensor = torch.tensor(self.inputs, dtype=torch.float32)
-        self.targets_tensor = torch.tensor(self.targets_norm, dtype=torch.float32)
+        # Targets stay RAW (physical units) here -- fit_train_normalizer() must be
+        # called (after the train/test split) before targets_tensor is usable for
+        # training/eval. This avoids baking in full-dataset (train+test) statistics.
+        self.targets_tensor = torch.tensor(self.targets, dtype=torch.float32)
+        self.target_min = None
+        self.target_max = None
 
-        print(f"done!: Input {self.inputs_tensor.shape}, Target {self.targets_tensor.shape}")
+        print(f"done!: Input {self.inputs_tensor.shape}, Target {self.targets_tensor.shape} (raw, un-normalized)")
 
     def save_pt(self, pt_path):
         """Save the processed input/output tensors and stats to one compact .pt file."""
@@ -104,9 +104,7 @@ class CavityDataset(Dataset):
 
         payload = {
             'inputs': self.inputs_tensor,   # (N, 50, 50, 3) -> [Kn, x, y]
-            'targets': self.targets_tensor, # (N, 50, 50, 10) -> [w, P, q] (normalized)
-            'target_mean': torch.tensor(self.target_mean, dtype=torch.float32),
-            'target_std': torch.tensor(self.target_std, dtype=torch.float32),
+            'targets': self.targets_tensor, # (N, 50, 50, 10) -> [w, P, q] (RAW, physical units)
             'nx': self.nx,
             'ny': self.ny,
         }
@@ -121,12 +119,41 @@ class CavityDataset(Dataset):
 
         self.inputs_tensor = payload['inputs']
         self.targets_tensor = payload['targets']
-        self.target_mean = payload['target_mean'].numpy()
-        self.target_std = payload['target_std'].numpy()
         self.nx = int(payload['nx'])
         self.ny = int(payload['ny'])
+        self.target_min = None
+        self.target_max = None
 
-        print(f"done!: Input {self.inputs_tensor.shape}, Target {self.targets_tensor.shape}")
+        if 'target_mean' in payload:
+            # Old-format cache: targets were baked in as a full-dataset
+            # (train+test) z-score. Un-bake back to raw physical units so
+            # fit_train_normalizer() can re-encode with train-only stats.
+            mean = payload['target_mean']
+            std = payload['target_std']
+            self.targets_tensor = self.targets_tensor * std + mean
+            print("Old-format cache detected: un-baked full-dataset z-score back to raw units.")
+
+        print(f"done!: Input {self.inputs_tensor.shape}, Target {self.targets_tensor.shape} (raw, un-normalized)")
+
+    def fit_train_normalizer(self, train_indices):
+        """Compute per-channel min/max on train split only (targets_tensor must
+        be RAW/un-normalized at this point), normalize targets to [0,1] in place."""
+        train_indices = torch.as_tensor(train_indices)
+        train = self.targets_tensor.index_select(0, train_indices)
+        self.target_min = train.amin(dim=(0, 1, 2))
+        self.target_max = train.amax(dim=(0, 1, 2))
+        rng = self.target_max - self.target_min
+        rng = torch.where(rng < 1e-12, torch.ones_like(rng), rng)
+        self.targets_tensor = (self.targets_tensor - self.target_min) / rng
+        print(f"Train-only min-max applied: {len(train_indices)} train samples.")
+
+    def denormalize(self, tensor, channel_idx=None):
+        """Restore [0,1] train-only normalized tensor(s) back to physical values."""
+        if self.target_min is None:
+            raise RuntimeError("fit_train_normalizer() must be called before denormalize()")
+        if channel_idx is None:
+            return tensor * (self.target_max - self.target_min) + self.target_min
+        return tensor * (self.target_max[channel_idx] - self.target_min[channel_idx]) + self.target_min[channel_idx]
 
     def __len__(self):
         return len(self.inputs_tensor)

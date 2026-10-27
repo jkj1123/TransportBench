@@ -54,7 +54,7 @@ def main():
     log(f"=== Training {args.model.upper()} | Fourier: {use_fourier} | Device: {device} ===")
     log("Strategy: TIME-DILATED GOLDEN PROTOCOL (Peak LR @ 40%, Weights start @ Ep800)")
 
-    train_loader, test_loader, x_norm, y_norm = get_dataloader_and_stats(args.data_path, args.batch_size, device)
+    train_loader, test_loader, x_norm, y_norm, _vac_unused = get_dataloader_and_stats(args.data_path, args.batch_size, device)  # NOTE: legacy script, not updated for vacuum masking/MSE loss -- see UPSTREAM_CHANGES_2026-10-25.md
     
     model = build_model(args.model, use_fourier).to(device)
 

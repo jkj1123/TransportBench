@@ -1,0 +1,35 @@
+Task1_Airfoil RBF POD-ROM, redone under the current fit_train_normalizer pipeline (train-only [0,1] base-field normalization).
+r=2 (leave-one-out CV on 80 train cases, LOOCV mean rel2=91.348%), captures 22.6487% of full-train residual energy.
+Branch PCA: 15 components capture 100.00% of the 674-dim airfoil geometry variance (RBF fit on these, not raw 674-dim).
+train=80  test=20  grid=128x128  channels=4
+
+Test rel L2 (residual, fluid-masked, full RBF POD-ROM):
+  mean=95.0382%  median=97.3282%  std=4.9083%  min=79.3614%  max=99.9817%
+
+Test rel L2 (residual, POD projection only, oracle coefficients -- upper bound on RBF):
+  mean=94.6916%  median=97.0935%
+
+Leave-one-out CV rank sweep (train-only, no test leakage):
+  r=  2: LOOCV mean rel2= 91.348%  <- selected
+  r=  4: LOOCV mean rel2= 91.390%
+  r=  6: LOOCV mean rel2= 92.255%
+  r=  8: LOOCV mean rel2= 93.116%
+  r= 10: LOOCV mean rel2= 93.963%
+  r= 12: LOOCV mean rel2= 94.808%
+  r= 14: LOOCV mean rel2= 95.409%
+  r= 16: LOOCV mean rel2= 96.286%
+  r= 18: LOOCV mean rel2= 97.106%
+  r= 20: LOOCV mean rel2= 97.722%
+  r= 22: LOOCV mean rel2= 98.424%
+  r= 24: LOOCV mean rel2= 99.208%
+  r= 26: LOOCV mean rel2= 99.733%
+  r= 28: LOOCV mean rel2=100.464%
+  r= 30: LOOCV mean rel2=101.228%
+
+Per-channel RBF POD-ROM residual rel L2 (mean over test cases):
+    rho: 90.9891%
+      u: 95.1381%
+      v: 93.6199%
+      p: 97.7564%
+
+Note: unlike the neural train_residual_*.py scripts, this closed-form POD+RBF method is mathematically invariant to the residual target's linear scaling (global std vs [-1,1] min-max) -- the only pipeline change that actually affects these numbers vs. the old (pre-10/26) POD-ROM analysis is fit_train_normalizer on the base field.

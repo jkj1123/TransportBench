@@ -82,6 +82,9 @@ def main():
     train_size = int(0.8 * len(dataset))
     test_size = len(dataset) - train_size
     train_data, test_data = random_split(dataset, [train_size, test_size], generator=torch.Generator().manual_seed(42))
+    dataset.fit_train_normalizer(train_data.indices)
+    fluid = dataset.fluid_mask.to(device)
+    fluid_2d = fluid.view(dataset.H, dataset.W)
 
     train_loader = DataLoader(train_data, batch_size=args.batch_size, shuffle=True)
     test_loader = DataLoader(test_data, batch_size=args.batch_size, shuffle=False)
@@ -150,13 +153,14 @@ def main():
             if data_mode == 'grid':
                 x, y = batch[0].to(device), batch[1].to(device)
                 pred = model(x)
+                loss = criterion(pred[:, :, fluid_2d], y[:, :, fluid_2d])
             else:
                 x_branch, x_trunk, y = batch[0].to(device), batch[1].to(device), batch[2].to(device)
                 x_branch = x_branch[:, :2]  # (Kn, Ma)
                 x_trunk = x_trunk[0]  # All samples share the same grid
                 pred = model(x_branch, x_trunk)
+                loss = criterion(pred[:, fluid], y[:, fluid])
 
-            loss = criterion(pred, y)
             loss.backward()
             optimizer.step()
             if scheduler is not None:
@@ -174,19 +178,24 @@ def main():
                 if data_mode == 'grid':
                     x, y = batch[0].to(device), batch[1].to(device)
                     pred = model(x)
+                    loss = criterion(pred[:, :, fluid_2d], y[:, :, fluid_2d])
                 else:
                     x_branch, x_trunk, y = batch[0].to(device), batch[1].to(device), batch[2].to(device)
                     x_branch = x_branch[:, :2]
                     x_trunk = x_trunk[0]
                     pred = model(x_branch, x_trunk)
+                    loss = criterion(pred[:, fluid], y[:, fluid])
 
-                loss = criterion(pred, y)
                 test_loss_acc += loss.item()
 
-                # Relative L2 Error (per-sample), only on log epochs
+                # Relative L2 Error (per-sample), only on log epochs, fluid-only
                 if compute_rel2:
-                    pred_flat = pred.reshape(pred.shape[0], -1)
-                    y_flat = y.reshape(y.shape[0], -1)
+                    if data_mode == 'grid':
+                        pred_f, y_f = pred[:, :, fluid_2d], y[:, :, fluid_2d]
+                    else:
+                        pred_f, y_f = pred[:, fluid], y[:, fluid]
+                    pred_flat = pred_f.reshape(pred_f.shape[0], -1)
+                    y_flat = y_f.reshape(y_f.shape[0], -1)
                     per_sample_rel2 = torch.norm(pred_flat - y_flat, p=2, dim=1) / \
                                        (torch.norm(y_flat, p=2, dim=1) + 1e-8)
                     rel2_sum += per_sample_rel2.sum().item()

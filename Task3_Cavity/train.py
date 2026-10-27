@@ -18,13 +18,15 @@ from model_hyperdeeponet import HyperDeepONet
 from model_c_hyperdeeponet import c_HyperDeepONet
 from model_fusion_deeponet import Fusion_DeepONet
 from model_hyper_mscale_deeponet import HyperMscaleDeepONet
+from model_hyper_mscale_deeponet_gelu import HyperMscaleDeepONetGELU
 from data_loader import CavityDataset
 
 def get_args():
     parser = argparse.ArgumentParser(description="TransportBench - Task III: Cavity Flow")
     parser.add_argument('--model', type=str, required=True, 
                         choices=['deeponet', 'fno', 'unet', 'vit', 'ae', 'pt', 'mscale_deeponet', 'hyperdeeponet',\
-                                  'c_hyperdeeponet', 'fusion_deeponet', 'hyper_mscale_deeponet'], 
+                                  'c_hyperdeeponet', 'fusion_deeponet', 'hyper_mscale_deeponet',
+                                  'hyper_mscale_deeponet_gelu'],
                         help='Choose the baseline model')
     parser.add_argument('--epochs', type=int, default=100000, help='Number of training epochs')
     parser.add_argument('--batch_size', type=int, default=256, help='Batch size')
@@ -48,7 +50,8 @@ def main():
     train_size = int(0.8 * len(dataset))
     test_size = len(dataset) - train_size
     train_data, test_data = random_split(dataset, [train_size, test_size], generator=torch.Generator().manual_seed(42))
-    
+    dataset.fit_train_normalizer(train_data.indices)
+
     train_loader = DataLoader(train_data, batch_size=args.batch_size, shuffle=True)
     test_loader = DataLoader(test_data, batch_size=args.batch_size, shuffle=False)
 
@@ -78,6 +81,9 @@ def main():
                                       depth=7, activation='Tanh')
     elif args.model == 'hyper_mscale_deeponet':
         model = HyperMscaleDeepONet(branch_dim=1, trunk_dim=2, hidden_dim=68, num_outputs=10,
+                                    depth=4, activation='GELU')
+    elif args.model == 'hyper_mscale_deeponet_gelu':
+        model = HyperMscaleDeepONetGELU(branch_dim=1, trunk_dim=2, hidden_dim=68, num_outputs=10,
                                     depth=4, activation='GELU')
     
     model = model.to(device)
@@ -113,7 +119,7 @@ def main():
                 x_trunk = x[0, :, :, 1:3].reshape(-1, 2)
                 y = y.view(B, 2500, 10) 
                 pred = model(x_branch, x_trunk)
-            elif args.model in ['hyperdeeponet', 'c_hyperdeeponet','hyper_mscale_deeponet']:
+            elif args.model in ['hyperdeeponet', 'c_hyperdeeponet','hyper_mscale_deeponet','hyper_mscale_deeponet_gelu']:
                 B = x.shape[0]
                 x_branch = x[:, 0, 0, 0:1]
                 x0 = x[:, :, :, 1:3]
@@ -148,7 +154,7 @@ def main():
                     x_trunk = x[0, :, :, 1:3].reshape(-1, 2)
                     y = y.view(B, 2500, 10)
                     pred = model(x_branch, x_trunk)
-                elif args.model in ['hyperdeeponet', 'c_hyperdeeponet','hyper_mscale_deeponet']:
+                elif args.model in ['hyperdeeponet', 'c_hyperdeeponet','hyper_mscale_deeponet','hyper_mscale_deeponet_gelu']:
                     B = x.shape[0]
                     x_branch = x[:, 0, 0, 0:1]
                     x0 = x[:, :, :, 1:3]

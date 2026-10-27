@@ -1,0 +1,17 @@
+Task2_Cylinder: rel L2 distribution comparison on the same 80 test cases
+(cyl400, hidden_dim tuned for ~20K params each; POD-ROM r=32)
+
+POD-ROM (r=32, no NN):
+  mean=1.1129%  median=0.7351%  std=1.5072%  min=0.3738%  max=9.8223%
+HyperDeepONet (~18.8K):
+  mean=2.3748%  median=1.8719%  std=1.6570%  min=1.4182%  max=10.2916%
+Fusion_DeepONet (~19.6K):
+  mean=0.9673%  median=0.8659%  std=0.5127%  min=0.5080%  max=3.6027%
+
+Fraction of test cases (n=80) exceeding each rel2 threshold:
+ threshold     POD-ROM (r=32, no NN)    HyperDeepONet (~18.8K)  Fusion_DeepONet (~19.6K)
+      0.5%          69 ( 86.2%)             80 (100.0%)             80 (100.0%)   
+      1.0%          15 ( 18.8%)             80 (100.0%)             22 ( 27.5%)   
+      2.0%           6 (  7.5%)             32 ( 40.0%)              3 (  3.8%)   
+      5.0%           3 (  3.8%)              4 (  5.0%)              0 (  0.0%)   
+     10.0%           0 (  0.0%)              2 (  2.5%)              0 (  0.0%)   
