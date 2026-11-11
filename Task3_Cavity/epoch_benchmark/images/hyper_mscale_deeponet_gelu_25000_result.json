@@ -1,8 +1,0 @@
-{
-  "model": "hyper_mscale_deeponet_gelu",
-  "tag": "hyper_mscale_deeponet_gelu_25000",
-  "rel_l2_overall": 0.0065915600396692755,
-  "mae_overall": 0.001695963737487793,
-  "rel_l2_P0": 0.0002604910696391016,
-  "rel_l2_q0": 0.0037791593931615353
-}

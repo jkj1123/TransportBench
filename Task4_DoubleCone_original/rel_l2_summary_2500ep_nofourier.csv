@@ -1,4 +1,0 @@
-model,epochs,fourier,wall_time_min,best_epoch,best_test_loss_encoded_L1,rel_l2_rho,rel_l2_u,rel_l2_v,rel_l2_p,rel_l2_mean
-deeponet,2500,no_fourier,9.22,2400,0.26935,2.788193,0.322538,0.480303,1.788323,1.344839
-fno,2500,no_fourier,4.0,1562,0.309008,2.202295,0.414427,0.55861,1.258183,1.108379
-unet,2500,no_fourier,10.23,1097,0.297251,1.889729,0.401495,0.508022,1.86156,1.165201

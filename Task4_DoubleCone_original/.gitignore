@@ -32,3 +32,11 @@ Thumbs.db
 *.png
 *.pdf
 
+# Experiment run outputs/logs: not meant to be uploaded.
+gpu1_logs/
+gpu1_logs_paper/
+checkpoints_paper_protocol/
+checkpoints_2500ep_nofourier/
+*_comparison.csv
+rel_l2_summary*.csv
+

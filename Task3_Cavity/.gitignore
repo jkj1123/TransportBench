@@ -15,3 +15,6 @@ __pycache__/
 
 *.png
 *.pdf
+
+# Experiment run outputs/logs: not meant to be uploaded.
+epoch_benchmark/
