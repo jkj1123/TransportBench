@@ -1,6 +1,9 @@
 data/
 */data/
-*/output/
+output/
+
+# Experiment run scripts: not meant to be uploaded.
+*.sh
 
 *.dat
 *.npz
