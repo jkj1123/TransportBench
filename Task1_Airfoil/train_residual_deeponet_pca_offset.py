@@ -1,0 +1,251 @@
+"""
+Combines the two single-variable Task1 ablations tried separately:
+train_residual_deeponet_pca14.py (PCA-reduces the 674-dim geometry branch
+input to --pca_dim components, fit on TRAIN only) and
+train_residual_deeponet_fieldoffset.py (adds a fixed --field_offset to the
+ENTIRE mean-subtracted residual field, to check whether the full-dataset
+"branch ignores geometry" collapse is specific to 0 or just-as-easily
+collapses onto any constant). Tests whether reducing the branch input to
+its (near-exact, per earlier PCA analysis) intrinsic dimensionality helps
+the branch actually condition on geometry once the trivial-constant escape
+route is also removed.
+
+Logs TWO rel2 numbers: the standard one (vs the offset residual, as
+actually trained) and 'rel2_true_signal' (vs the offset subtracted back
+out) -- the offset inflates the residual's own L2 norm and can make the
+standard rel2 look deceptively good even if the model only learned the
+constant and still ignores geometry.
+"""
+import os
+import time
+import argparse
+import random
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.decomposition import PCA
+from tqdm import tqdm
+
+from model_deeponet import BoltzmannDeepONet
+from data_loader_fast import AirfoilDatasetFast, FastBatchIterator
+
+
+def get_args():
+    parser = argparse.ArgumentParser(description="Task I: BoltzmannDeepONet trained on mean-subtracted residual")
+    parser.add_argument('--epochs', type=int, default=5000)
+    parser.add_argument('--batch_size', type=int, default=16)
+    parser.add_argument('--lr', type=float, default=1e-3)
+    parser.add_argument('--data_path', type=str, default='airfoil_unified_128x128.pt')
+    parser.add_argument('--run_tag', type=str, default='residual_500k')
+    parser.add_argument('--hidden_dim', type=int, default=172,
+                        help='BoltzmannDeepONet hidden_dim; 172 -> 503,444 params (~500K budget) for branch_dim=674, depth=5.')
+    parser.add_argument('--lr_decay_step', type=int, default=100,
+                        help='Matches Task2_Cylinder/train_w_pod.py (latest config): decay every 100 epochs.')
+    parser.add_argument('--lr_decay_gamma', type=float, default=0.91,
+                        help='Matches Task2_Cylinder/train_w_pod.py (latest config).')
+    parser.add_argument('--field_offset', type=float, default=0.1,
+                        help='Constant added to the entire mean-subtracted residual field before normalization.')
+    parser.add_argument('--pca_dim', type=int, default=4,
+                        help='Number of PCA components the 674-dim flattened geometry point cloud is reduced to.')
+    return parser.parse_args()
+
+
+def main():
+    args = get_args()
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+    seed = 42
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+    if device == 'cuda':
+        torch.cuda.manual_seed_all(seed)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+
+    print(f"Starting Task I Training | Model: BoltzmannDeepONet (RESIDUAL target) | Device: {device}")
+    if device == 'cuda':
+        print(f"  torch.cuda.current_device()={torch.cuda.current_device()}  "
+              f"name={torch.cuda.get_device_name(0)}")
+
+    save_dir = os.path.join('output', f"deeponet_{args.run_tag}")
+    os.makedirs(save_dir, exist_ok=True)
+    save_path = os.path.join(save_dir, "best_model.pth")
+
+    dataset = AirfoilDatasetFast(args.data_path, mode='deeponet', device=device)
+    train_idx, test_idx = dataset.split(train_ratio=0.8, seed=42)
+    train_idx, test_idx = train_idx.to(device), test_idx.to(device)
+    # Train-only [0,1] renormalization (matches upstream ZweigGit/TransportBench
+    # fit_train_normalizer; see UPSTREAM_CHANGES_2026-10-25.md). Must happen
+    # BEFORE the mean/residual computation below.
+    dataset.fit_train_normalizer(train_idx)
+
+    # PCA-reduce the 674-dim flattened geometry point cloud, fit on the TRAIN
+    # split only (no test leakage), then transform all samples.
+    geo_np = dataset.branch_all.cpu().numpy()
+    train_idx_np = train_idx.cpu().numpy()
+    pca = PCA(n_components=args.pca_dim)
+    pca.fit(geo_np[train_idx_np])
+    branch_all_pca = torch.from_numpy(pca.transform(geo_np)).to(device=device, dtype=dataset.branch_all.dtype)
+    explained = pca.explained_variance_ratio_.sum()
+    print(f"PCA: reduced geometry branch input 674 -> {args.pca_dim} dims "
+          f"(explained variance: {explained*100:.2f}%)")
+
+    target_train = dataset.target_all[train_idx]
+    mask_train = dataset.geo_mask_flat[train_idx]
+    mask_sum = mask_train.sum(dim=0).clamp(min=1.0)
+    mean_field_flat = (target_train * mask_train).sum(dim=0) / mask_sum
+
+    residual_all = dataset.target_all - mean_field_flat.unsqueeze(0) + args.field_offset
+    print(f"Added constant field_offset={args.field_offset} to the entire residual field.")
+
+    residual_train_masked = residual_all[train_idx] * mask_train
+    # [-1,1] min-max normalization (per-channel, masked TRAIN residual only --
+    # no test leakage). Replaces a global-std z-score: that left the regression
+    # target extremely heavy-tailed (train pixels up to ~29 std from zero, since
+    # the shock-front residual is a rare, large-magnitude outlier against an
+    # otherwise near-zero bulk), which let 'predict ~0 everywhere' become a
+    # deceptively stable trivial minimum under plain MSE + weight_decay (observed
+    # as rel2(resid) pinned at exactly 1.0 for the full 5000-epoch budget). Bounding
+    # the target to [-1,1] removes that outlier domination; verified empirically to
+    # unstick training (rel2 dropping below 1.0 within single-digit epochs instead
+    # of staying frozen at 1.0 for thousands).
+    mask_train_bool = mask_train.expand_as(residual_train_masked) > 0
+    min_c = torch.stack([residual_train_masked[..., c][mask_train_bool[..., c]].min()
+                         for c in range(residual_train_masked.shape[-1])]).view(1, 1, -1)
+    max_c = torch.stack([residual_train_masked[..., c][mask_train_bool[..., c]].max()
+                         for c in range(residual_train_masked.shape[-1])]).view(1, 1, -1)
+    range_c = (max_c - min_c).clamp(min=1e-8)
+    print(f"residual per-channel train min/max: min={min_c.flatten().tolist()} max={max_c.flatten().tolist()}")
+
+    residual_norm_all = 2.0 * (residual_all - min_c) / range_c - 1.0
+
+    train_tensors = (branch_all_pca[train_idx], dataset.trunk_all[train_idx],
+                      residual_norm_all[train_idx], dataset.geo_mask_flat[train_idx])
+    test_tensors = (branch_all_pca[test_idx], dataset.trunk_all[test_idx],
+                     residual_norm_all[test_idx], dataset.geo_mask_flat[test_idx],
+                     residual_all[test_idx])
+
+    train_loader = FastBatchIterator(train_tensors, batch_size=args.batch_size, shuffle=True, device=device)
+    test_loader = FastBatchIterator(test_tensors, batch_size=args.batch_size, shuffle=False, device=device)
+
+    model = BoltzmannDeepONet(branch_dim=args.pca_dim, trunk_dim=2, hidden_dim=args.hidden_dim, num_outputs=4,
+                               depth=5, activation='GELU').to(device)
+    n_params = sum(p.numel() for p in model.parameters())
+    print(f"Model Parameters: {n_params} ({n_params/1e3:.1f}K)")
+
+    optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=1e-4)
+    scheduler = None
+    if args.lr_decay_step > 0:
+        scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=args.lr_decay_step, gamma=args.lr_decay_gamma)
+    criterion = nn.MSELoss()
+
+    best_test_loss = float('inf')
+    best_test_rel2 = float('inf')
+    history = {'train_loss': [], 'test_loss': []}
+    rel2_log_path = os.path.join(save_dir, 'rel2_history.csv')
+    with open(rel2_log_path, 'w') as f:
+        f.write('epoch,wall_time_sec,test_rel2,test_rel2_true_signal,best_test_rel2\n')
+    train_start_time = time.time()
+
+    print("Training Started...")
+    pbar = tqdm(range(args.epochs), desc="Training")
+    for epoch in pbar:
+        rel2_sum, rel2_count = 0.0, 0
+        rel2_true_sum = 0.0
+        model.train()
+        train_loss_acc = 0.0
+        for batch in train_loader:
+            optimizer.zero_grad()
+            x_branch, x_trunk, y, mask = batch
+            batch_size = x_branch.shape[0]
+            pred_list = [model(x_branch[i:i+1], x_trunk[i]) for i in range(batch_size)]
+            pred = torch.cat(pred_list, dim=0)
+            loss = criterion(pred * mask, y * mask)
+            loss.backward()
+            optimizer.step()
+            train_loss_acc += loss.item()
+
+        if scheduler is not None:
+            scheduler.step()
+        avg_train_loss = train_loss_acc / len(train_loader)
+        history['train_loss'].append(avg_train_loss)
+
+        model.eval()
+        test_loss_acc = 0.0
+        with torch.no_grad():
+            for batch in test_loader:
+                x_branch, x_trunk, y, mask, y_raw = batch
+                batch_size = x_branch.shape[0]
+                pred_list = [model(x_branch[i:i+1], x_trunk[i]) for i in range(batch_size)]
+                pred = torch.cat(pred_list, dim=0)
+                loss = criterion(pred * mask, y * mask)
+                test_loss_acc += loss.item()
+
+                pred_phys = (pred + 1.0) / 2.0 * range_c + min_c
+                pred_masked = (pred_phys * mask).reshape(pred.shape[0], -1)
+                y_masked = (y_raw * mask).reshape(y_raw.shape[0], -1)
+                per_sample_rel2 = torch.norm(pred_masked - y_masked, p=2, dim=1) / \
+                                   (torch.norm(y_masked, p=2, dim=1) + 1e-8)
+                rel2_sum += per_sample_rel2.sum().item()
+                rel2_count += pred_masked.shape[0]
+
+                # Subtract the known field_offset back out of both pred and
+                # true before comparing, to see genuine (geometry-dependent)
+                # structure learned, independent of just matching the offset.
+                pred_true_signal = ((pred_phys - args.field_offset) * mask).reshape(pred.shape[0], -1)
+                y_true_signal = ((y_raw - args.field_offset) * mask).reshape(y_raw.shape[0], -1)
+                per_sample_rel2_true = torch.norm(pred_true_signal - y_true_signal, p=2, dim=1) / \
+                                        (torch.norm(y_true_signal, p=2, dim=1) + 1e-8)
+                rel2_true_sum += per_sample_rel2_true.sum().item()
+
+        avg_test_loss = test_loss_acc / len(test_loader)
+        history['test_loss'].append(avg_test_loss)
+        test_rel2 = rel2_sum / rel2_count
+        test_rel2_true = rel2_true_sum / rel2_count
+        if test_rel2 < best_test_rel2:
+            best_test_rel2 = test_rel2
+        wall_time_sec = time.time() - train_start_time
+        with open(rel2_log_path, 'a') as f:
+            f.write(f'{epoch + 1},{wall_time_sec:.2f},{test_rel2:.6g},{test_rel2_true:.6g},{best_test_rel2:.6g}\n')
+
+        if avg_test_loss < best_test_loss:
+            best_test_loss = avg_test_loss
+            torch.save({
+                'model_state_dict': model.state_dict(),
+                'mean_field_flat': mean_field_flat.cpu(),
+                'min_c': min_c.cpu(),
+                'max_c': max_c.cpu(),
+                'hidden_dim': args.hidden_dim,
+                'pca_dim': args.pca_dim,
+                'field_offset': args.field_offset,
+            }, save_path)
+
+        pbar.set_postfix({
+            'train': f'{avg_train_loss:.4g}',
+            'test': f'{avg_test_loss:.4g}',
+            'best': f'{best_test_loss:.4g}',
+            'rel2(resid)': f'{test_rel2:.4g}',
+            'rel2(true_signal)': f'{test_rel2_true:.4g}',
+            'best_rel2': f'{best_test_rel2:.4g}',
+        })
+
+    total_wall_time = time.time() - train_start_time
+    print(f"Training Complete! Best Test Loss: {best_test_loss:.4g} | Best Test Rel L2 (residual) : {best_test_rel2:.4g} | "
+          f"Wall Time: {total_wall_time:.1f}s. Model saved to {save_path}")
+
+    np.save(os.path.join(save_dir, 'history.npy'), history)
+    plt.figure(figsize=(8, 5))
+    plt.plot(history['train_loss'], label='Train', alpha=0.8)
+    plt.plot(history['test_loss'], label='Test', alpha=0.8)
+    plt.yscale('log')
+    plt.xlabel('Epoch'); plt.ylabel('Masked MSE (residual target)')
+    plt.legend(); plt.title('BoltzmannDeepONet on Task1 residual (mean-subtracted) target')
+    plt.tight_layout()
+    plt.savefig(os.path.join(save_dir, 'loss_curve.png'), dpi=150)
+
+
+if __name__ == '__main__':
+    main()

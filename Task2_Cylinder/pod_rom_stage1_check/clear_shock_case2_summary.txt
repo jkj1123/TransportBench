@@ -1,0 +1,7 @@
+Clear-shock test case #2 (continuum regime Kn~0, 2nd-highest Ma)
+local test idx=8  Kn=0.0000  Ma=0.7959
+
+rel L2 (fluid-masked, full field):
+  POD-ROM (r=32):      8.8616%
+  HyperDeepONet:       10.0252%
+  Fusion_DeepONet:     3.3349%

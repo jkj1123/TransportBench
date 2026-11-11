@@ -1,0 +1,8 @@
+{
+  "model": "mscale_deeponet",
+  "tag": "mscale_deeponet_1000",
+  "rel_l2_overall": 0.01666672620922327,
+  "mae_overall": 0.005564568939208985,
+  "rel_l2_P0": 0.0004761700110975653,
+  "rel_l2_q0": 0.006609026342630386
+}

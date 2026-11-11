@@ -1,0 +1,8 @@
+{
+  "model": "fusion_deeponet",
+  "tag": "fusion_deeponet_10000",
+  "rel_l2_overall": 0.004434797866269946,
+  "mae_overall": 0.0016320879135131837,
+  "rel_l2_P0": 0.0001585562276886776,
+  "rel_l2_q0": 0.0023991060443222523
+}

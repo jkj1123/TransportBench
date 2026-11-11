@@ -1,0 +1,15 @@
+model=lnlr_base
+hidden_dim_override=208
+data_path=./cylinder_full_2400_400_seed42.pt
+epochs=5000
+batch_size=16
+lr=0.001
+lr_decay_step=100
+lr_decay_gamma=0.91
+run_tag=cyl400_param200k_decay100
+seed=42
+start_time=2026-11-02 01:52:01
+num_params=200564
+end_time=2026-11-02 02:47:59
+elapsed_sec=3358.4
+best_test_loss=0.00105548

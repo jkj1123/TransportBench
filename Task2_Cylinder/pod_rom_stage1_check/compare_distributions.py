@@ -123,7 +123,7 @@ for name, arr in results.items():
     plt.hist(np.clip(arr, 1e-4, None), bins=bins, alpha=0.5, label=name)
 plt.xscale('log')
 plt.xlabel('rel L2 (log scale)'); plt.ylabel('count (of 80 test cases)')
-plt.title('Task2_Cylinder: rel L2 distribution, POD-ROM vs HyperDeepONet vs Fusion_DeepONet')
+plt.title('Task2_Cylinder: rel L2 distribution\nPOD-ROM vs HyperDeepONet vs Fusion_DeepONet')
 plt.legend(fontsize=8)
 plt.tight_layout()
 plt.savefig(os.path.join(OUT_DIR, 'distribution_comparison.png'), dpi=150)

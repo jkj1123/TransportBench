@@ -1,0 +1,7 @@
+Arbitrary representative test case (idx=10, no special selection)
+local test idx=10  Kn=0.4681  Ma=0.4082
+
+rel L2 (fluid-masked, full field):
+  POD-ROM (r=32):      0.5721%
+  HyperDeepONet:       1.6302%
+  Fusion_DeepONet:     0.6438%

@@ -1,0 +1,7 @@
+Shock+wake test case (continuum regime Kn~0, max Ma)
+local test idx=75  Kn=0.0000  Ma=0.8367
+
+rel L2 (fluid-masked, full field):
+  POD-ROM (r=32):      9.8223%
+  HyperDeepONet:       10.2916%
+  Fusion_DeepONet:     3.6027%

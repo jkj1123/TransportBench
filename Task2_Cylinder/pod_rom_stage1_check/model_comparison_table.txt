@@ -1,0 +1,10 @@
+Task2_Cylinder: rel L2 comparison (same 80 held-out test cases)
+
+             Model     Params       Mean     Median        Max
+    POD-ROM (r=32)          0     1.113%     0.735%     9.822%
+   Fusion_DeepONet     19,554     0.967%     0.866%     3.603%
+     HyperDeepONet     18,757     2.375%     1.872%    10.292%
+     HyperDeepONet    196,332     1.807%     1.413%     7.016%
+          DeepONet    199,014     4.730%     3.865%    17.592%
+
+Note: DeepONet has no 20K-param checkpoint available; the existing ~199K-param run is shown instead. The two HyperDeepONet rows (18,757 vs 196,332 params) show that a 10x larger HyperDeepONet improves but still does not beat POD-ROM or the 20K Fusion_DeepONet.

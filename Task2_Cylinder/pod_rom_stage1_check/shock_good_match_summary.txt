@@ -1,0 +1,7 @@
+Strong-shock, well-matched case (max Ma, away from Kn~0 failure regime)
+local test idx=47  Kn=0.2553  Ma=1.0000
+
+rel L2 (fluid-masked, full field):
+  POD-ROM (r=32):      0.7357%
+  HyperDeepONet:       2.7134%
+  Fusion_DeepONet:     1.0070%

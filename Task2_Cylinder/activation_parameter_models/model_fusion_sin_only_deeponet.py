@@ -1,47 +1,47 @@
+"""
+Ablation of model_fusion_deeponet.py (not modified by this file): removes
+the GELU/Tanh term from the activation entirely, keeping only the
+learnable-amplitude/frequency/phase sin term:
+
+    original: y = act(10*a*z + c) + 10*a1*sin(10*F1*z + c1)
+    this file: y = 10*a1*sin(10*F1*z + c1)
+
+a1 is still zero-initialized (as in the original), so this model also
+starts as the identically-zero function and has to bootstrap entirely
+through the sin term's own gradient -- same init convention as the
+original, just with no GELU term to also contribute from the start.
+
+a/c (the now-unused GELU-term scale/shift) are removed; a1/F1/c1 (sin
+amplitude/frequency/phase) are kept exactly as before. Branch/trunk Linear
+stacks, skip accumulation, and the final DeepONet inner product are
+unchanged. `activation` constructor arg is accepted but unused (kept only
+so existing call sites don't need to change).
+"""
 import torch
 import torch.nn as nn
 
 
-class GaborActivation(nn.Module):
-    """Real-valued Gabor activation: phi(z) = exp(-s^2 * z^2) * cos(w * z).
-
-    w (omega) and s are learnable, layerwise SCALAR parameters (shared by
-    every neuron in the layer), initialized to w0=1.0 / s0=1.0. No complex
-    arithmetic is involved -- input and output are both real.
-    """
-    def __init__(self, w0=1.0, s0=1.0):
-        super().__init__()
-        self.w = nn.Parameter(torch.tensor(float(w0)))
-        self.s = nn.Parameter(torch.tensor(float(s0)))
-
-    def forward(self, z):
-        return torch.exp(-(self.s ** 2) * z ** 2) * torch.cos(self.w * z)
+class sin_act(nn.Module):
+    def forward(self, x):
+        return torch.sin(x)
 
 
 class Fusion_DeepONet(nn.Module):
     def __init__(self, branch_dim=1, trunk_dim=2, hidden_dim=280, num_outputs=10, depth=5, activation='GELU'):
-        """
-        DeepONet for Cavity Task (Square Domain)
-        Args:
-            branch_dim: 1
-            trunk_dim: 2 (x, y)
-            hidden_dim: 280 (Target ~1.0M Params)
-            num_outputs: 10 (Physics quantities)
-            activation: unused -- every hidden layer uses the real Gabor
-                activation (see GaborActivation above); kept as a constructor
-                arg only so existing call sites don't need to change.
-        """
         super().__init__()
 
-        # One independent (w_l, s_l) Gabor activation per hidden layer, for
-        # BranchNet and TrunkNet separately (depth each, so 4*depth learnable
-        # scalars total -- e.g. 20 at depth=5).
-        self.branch_acts = nn.ModuleList([GaborActivation(w0=1.0, s0=1.0) for _ in range(depth)])
-        self.trunk_acts = nn.ModuleList([GaborActivation(w0=1.0, s0=1.0) for _ in range(depth)])
+        self.act2 = sin_act()
 
-        # Fusion-deeponet bookkeeping (unchanged): self.L-1 == depth hidden
-        # layers with an activation, plus one final (un-activated) output layer.
+        # Fusion-deeponet additional parameters (sin term only -- no a/c)
         self.L = depth + 1
+
+        self.a1b = nn.Parameter(torch.zeros(self.L,))
+        self.F1b = nn.Parameter(torch.full((self.L,), 0.1))
+        self.c1b = nn.Parameter(torch.zeros(self.L,))
+
+        self.a1t = nn.Parameter(torch.zeros(self.L,))
+        self.F1t = nn.Parameter(torch.full((self.L,), 0.1))
+        self.c1t = nn.Parameter(torch.zeros(self.L,))
 
         # Branch Net
         self.branch_net = nn.ModuleList()
@@ -81,7 +81,7 @@ class Fusion_DeepONet(nn.Module):
         for i in range(self.L-1):
 
             branch_lin = self.branch_net[i](x_branch)
-            x_branch = self.branch_acts[i](branch_lin)
+            x_branch = 10*self.a1b[i]*self.act2(10*self.F1b[i]*branch_lin+self.c1b[i])
             skip.append(x_branch)
 
         for i in range(1,self.L-1):
@@ -90,7 +90,7 @@ class Fusion_DeepONet(nn.Module):
         for i in range(self.L-1):
 
             trunk_lin = self.trunk_net[i](x_trunk)
-            x_trunk = self.trunk_acts[i](trunk_lin)
+            x_trunk = 10*self.a1t[i]*self.act2(10*self.F1t[i]*trunk_lin+self.c1t[i])
 
             x_trunk = torch.einsum('bk,bik->bik', skip[i], x_trunk)
 

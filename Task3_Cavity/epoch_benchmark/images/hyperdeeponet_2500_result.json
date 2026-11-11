@@ -1,0 +1,8 @@
+{
+  "model": "hyperdeeponet",
+  "tag": "hyperdeeponet_2500",
+  "rel_l2_overall": 0.028657570481300354,
+  "mae_overall": 0.009041006286621094,
+  "rel_l2_P0": 0.0008991798968054354,
+  "rel_l2_q0": 0.014009930193424225
+}
