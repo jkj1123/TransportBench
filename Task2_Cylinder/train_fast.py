@@ -68,13 +68,12 @@ from model_rm_deeponet import RM_DeepONet
 from model_rhm_deeponet import RHM_DeepONet
 from model_LRNR import LRNR
 from model_coordinate_mlp import CoordinateMLP
-from model_nomad import NOMAD
 from data_loader_fast import CylinderDatasetFast, FastBatchIterator
 
 def get_args():
     parser = argparse.ArgumentParser(description="TransportBench - Task II: Cylinder Flow (overhead-fixed loader)")
     parser.add_argument('--model', type=str, required=True,
-                        choices=['deeponet', 'fno', 'unet', 'vit', 'ae', 'pt', 'mscale_deeponet', 'hyperdeeponet', 'L_hyperdeeponet', 'c_hyperdeeponet', 'hyper_mscale_deeponet', 'fusion_deeponet', 'fusion_sin_only_deeponet', 'fusion_cond_deeponet', 'residual_fusion_deeponet', 'bilinear_deeponet', 'bilinear_fusion_deeponet', 'wavelet_deeponet', 'fusion_gabor_deeponet', 'fusion_gabor_fixed_deeponet', 'fusion_gabor_cond_deeponet', 'hyperdeeponet_gabor', 'hyperdeeponet_gabor_cond', 'basismixing_hyperdeeponet', 'basismixing_indepbasis_hyperdeeponet', 'r_deeponet', 'rm_deeponet', 'rhm_deeponet', 'w_deeponet', 'wm_deeponet', 'whm_deeponet', 'lrnr', 'coordinate_mlp', 'nomad'],
+                        choices=['deeponet', 'fno', 'unet', 'vit', 'ae', 'pt', 'mscale_deeponet', 'hyperdeeponet', 'L_hyperdeeponet', 'c_hyperdeeponet', 'hyper_mscale_deeponet', 'fusion_deeponet', 'fusion_sin_only_deeponet', 'fusion_cond_deeponet', 'residual_fusion_deeponet', 'bilinear_deeponet', 'bilinear_fusion_deeponet', 'wavelet_deeponet', 'fusion_gabor_deeponet', 'fusion_gabor_fixed_deeponet', 'fusion_gabor_cond_deeponet', 'hyperdeeponet_gabor', 'hyperdeeponet_gabor_cond', 'basismixing_hyperdeeponet', 'basismixing_indepbasis_hyperdeeponet', 'r_deeponet', 'rm_deeponet', 'rhm_deeponet', 'w_deeponet', 'wm_deeponet', 'whm_deeponet', 'lrnr', 'coordinate_mlp'],
                         # 'L_D_hyperdeeponet', 'LDg_hyperdeeponet', 'cf_hyperdeeponet', 'cf_test_hyperdeeponet',
                         # 'cf_test2_hyperdeeponet',
                         # 'fusion_wbt_deeponet' removed: their model_*.py files
@@ -135,8 +134,6 @@ def get_args():
     parser.add_argument('--lrnr_s', type=int, default=0,
                         help='lrnr: override the low-rank coefficient width s '
                              '(0 = default 12; pass the same value as --hidden_dim to remove the rank bottleneck).')
-    parser.add_argument('--nomad_latent_dim', type=int, default=0,
-                        help='nomad: override the Branch-generated latent dim beta(mu) (0 = default 8).')
     parser.add_argument('--lrnr_s_w_offset', type=float, default=0.0,
                         help='lrnr: fixed constant added to every element of s_w_l (the W_l-generating '
                              'coefficients only, not s_b_l), to keep W_l=U_l diag(s_w_l) V_l^T from '
@@ -305,14 +302,6 @@ def main():
         coord_hidden_dim = args.hidden_dim if args.hidden_dim > 0 else 46
         model = CoordinateMLP(branch_dim=2, trunk_dim=2, hidden_dim=coord_hidden_dim, num_outputs=4,
                               trunk_depth=3, branch_depth=3, activation='GELU')
-    elif args.model == 'nomad':
-        # NOMAD baseline (model_nomad.py): Branch MLP -> latent vector beta(mu),
-        # Decoder MLP on [beta(mu), x]. No hypernetwork, no branch-trunk dot
-        # product -- Decoder weights are ordinary learned nn.Parameters.
-        nomad_hidden_dim = args.hidden_dim if args.hidden_dim > 0 else 46
-        nomad_latent_dim = args.nomad_latent_dim if args.nomad_latent_dim > 0 else 8
-        model = NOMAD(branch_dim=2, trunk_dim=2, hidden_dim=nomad_hidden_dim, num_outputs=4,
-                     trunk_depth=3, branch_depth=3, activation='GELU', latent_dim=nomad_latent_dim)
     elif args.model == 'pt':
         model = PointTransformer(in_dim=4, out_dim=4, embed_dim=144, depth=4)
     elif args.model == 'mscale_deeponet':
