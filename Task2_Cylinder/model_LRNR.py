@@ -10,11 +10,17 @@ import torch
 import torch.nn as nn
 
 
-class LNLR(nn.Module):
+class LRNR(nn.Module):
     def __init__(self, branch_dim=674, trunk_dim=2, hidden_dim=46,
                  num_outputs=4, trunk_depth=3, branch_depth=3,
-                 activation='GELU'):
+                 activation='GELU', s=12, s_w_offset=0.0):
         super().__init__()
+        # Fixed constant added to every element of s_w_l before use (does not
+        # affect s_b_l). s_w_offset=0.0 (default) reproduces the original
+        # behavior exactly. A nonzero offset keeps W_l = U_l diag(s_w_l) V_l^T
+        # from collapsing to the all-zero solution the branch can otherwise
+        # drive it to, since diag(s_w_l) can no longer be driven to exactly 0.
+        self.s_w_offset = s_w_offset
 
         if activation == 'Tanh':
             act = nn.Tanh
@@ -28,7 +34,7 @@ class LNLR(nn.Module):
         # Trunk architecture: [trunk_dim, hidden, ..., hidden, num_outputs]
         self.trunk_dims = [trunk_dim] + [hidden_dim] * trunk_depth + [num_outputs]
 
-        self.s = 12
+        self.s = s
         # One independent (s_w_l, s_b_l) pair of rank-`s` coefficient vectors
         # per hypernetwork-generated hidden layer (trunk_depth - 1 of them).
         self.num_hidden_layers = trunk_depth - 1
@@ -68,7 +74,7 @@ class LNLR(nn.Module):
         for i in range(1, len(self.trunk_dims) - 2):
             layer_idx = i - 1
             offset = layer_idx * 2 * s
-            s_w_l = params[:, offset:offset + s]
+            s_w_l = params[:, offset:offset + s] + self.s_w_offset
             s_b_l = params[:, offset + s:offset + 2 * s]
 
             weight1 = self.trunk_net.hidden_0_net[2 * layer_idx].weight   # U_l:   [dims[i+1], s]
@@ -120,7 +126,7 @@ class _MLP_reduced(nn.Module):
     hidden_0_net / hidden_1_net hold each layer's U_l / V_l^T (low-rank
     weight factors); bias_basis_net holds each layer's B_l (bias basis
     matrix). Only the raw `.weight` of these Linear modules is used (see
-    LNLR._trunk_forward), so the Act() modules interleaved in
+    LRNR._trunk_forward), so the Act() modules interleaved in
     hidden_0_net/hidden_1_net below are never invoked -- unchanged from the
     original implementation.
     """
@@ -136,7 +142,7 @@ class _MLP_reduced(nn.Module):
         first_layers.append(act())
 
         for i in range(1, len(dims) - 2):
-            # bias=False: only .weight (U_l) is ever read (see LNLR._trunk_forward);
+            # bias=False: only .weight (U_l) is ever read (see LRNR._trunk_forward);
             # the per-layer bias now comes from bias_basis_net (B_l) instead.
             hidden_layers_0.append(nn.Linear(diag, dims[i + 1], bias=False))
             hidden_layers_0.append(act())

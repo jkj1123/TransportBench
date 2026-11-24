@@ -66,15 +66,15 @@ from model_whm_deeponet import WHM_DeepONet
 from model_r_deeponet import R_DeepONet
 from model_rm_deeponet import RM_DeepONet
 from model_rhm_deeponet import RHM_DeepONet
-from model_LNLR import LNLR
-from model_LNLR_Base import LNLR_Base
-from model_LNLR_UdiagS import LNLR_UdiagS
+from model_LRNR import LRNR
+from model_coordinate_mlp import CoordinateMLP
+from model_nomad import NOMAD
 from data_loader_fast import CylinderDatasetFast, FastBatchIterator
 
 def get_args():
     parser = argparse.ArgumentParser(description="TransportBench - Task II: Cylinder Flow (overhead-fixed loader)")
     parser.add_argument('--model', type=str, required=True,
-                        choices=['deeponet', 'fno', 'unet', 'vit', 'ae', 'pt', 'mscale_deeponet', 'hyperdeeponet', 'L_hyperdeeponet', 'c_hyperdeeponet', 'hyper_mscale_deeponet', 'fusion_deeponet', 'fusion_sin_only_deeponet', 'fusion_cond_deeponet', 'residual_fusion_deeponet', 'bilinear_deeponet', 'bilinear_fusion_deeponet', 'wavelet_deeponet', 'fusion_gabor_deeponet', 'fusion_gabor_fixed_deeponet', 'fusion_gabor_cond_deeponet', 'hyperdeeponet_gabor', 'hyperdeeponet_gabor_cond', 'basismixing_hyperdeeponet', 'basismixing_indepbasis_hyperdeeponet', 'r_deeponet', 'rm_deeponet', 'rhm_deeponet', 'w_deeponet', 'wm_deeponet', 'whm_deeponet', 'lnlr', 'lnlr_base', 'lnlr_udiags'],
+                        choices=['deeponet', 'fno', 'unet', 'vit', 'ae', 'pt', 'mscale_deeponet', 'hyperdeeponet', 'L_hyperdeeponet', 'c_hyperdeeponet', 'hyper_mscale_deeponet', 'fusion_deeponet', 'fusion_sin_only_deeponet', 'fusion_cond_deeponet', 'residual_fusion_deeponet', 'bilinear_deeponet', 'bilinear_fusion_deeponet', 'wavelet_deeponet', 'fusion_gabor_deeponet', 'fusion_gabor_fixed_deeponet', 'fusion_gabor_cond_deeponet', 'hyperdeeponet_gabor', 'hyperdeeponet_gabor_cond', 'basismixing_hyperdeeponet', 'basismixing_indepbasis_hyperdeeponet', 'r_deeponet', 'rm_deeponet', 'rhm_deeponet', 'w_deeponet', 'wm_deeponet', 'whm_deeponet', 'lrnr', 'coordinate_mlp', 'nomad'],
                         # 'L_D_hyperdeeponet', 'LDg_hyperdeeponet', 'cf_hyperdeeponet', 'cf_test_hyperdeeponet',
                         # 'cf_test2_hyperdeeponet',
                         # 'fusion_wbt_deeponet' removed: their model_*.py files
@@ -132,11 +132,13 @@ def get_args():
                              'W_l(b) = W0_l + a*U_l(b)V_l(b)^T (default 1.0 = unscaled).')
     parser.add_argument('--rel2_log_interval', type=int, default=50,
                         help='Log test rel-L2 error to rel2_history.csv every N epochs.')
-    parser.add_argument('--lnlr_s', type=int, default=0,
-                        help='lnlr/lnlr_base: override the low-rank coefficient width s '
+    parser.add_argument('--lrnr_s', type=int, default=0,
+                        help='lrnr: override the low-rank coefficient width s '
                              '(0 = default 12; pass the same value as --hidden_dim to remove the rank bottleneck).')
-    parser.add_argument('--lnlr_s_w_offset', type=float, default=0.0,
-                        help='lnlr: fixed constant added to every element of s_w_l (the W_l-generating '
+    parser.add_argument('--nomad_latent_dim', type=int, default=0,
+                        help='nomad: override the Branch-generated latent dim beta(mu) (0 = default 8).')
+    parser.add_argument('--lrnr_s_w_offset', type=float, default=0.0,
+                        help='lrnr: fixed constant added to every element of s_w_l (the W_l-generating '
                              'coefficients only, not s_b_l), to keep W_l=U_l diag(s_w_l) V_l^T from '
                              'collapsing to all-zero (0.0 = default, no offset).')
     parser.add_argument('--basismixing_coeff_offset', type=float, default=0.0,
@@ -286,31 +288,31 @@ def main():
         model = RHM_DeepONet(branch_dim=2, trunk_dim=2, hidden_dim=rhm_hidden_dim,
                              trunk_hidden_dim=rhm_trunk_hidden_dim, num_basis=rhm_num_basis,
                              num_outputs=4, depth=5, coord_range=[(-3.0, 5.5), (-3.0, 3.0)])
-    elif args.model == 'lnlr':
-        # Low-rank hypernetwork trunk (model_LNLR.py): branch net outputs a
+    elif args.model == 'lrnr':
+        # Low-rank hypernetwork trunk (model_LRNR.py): branch net outputs a
         # small param vector (size s=32) that forms a low-rank factorization
         # of each trunk hidden-to-hidden weight matrix, instead of directly
         # generating the full matrix (HyperDeepONet) or a fixed basis.
-        lnlr_hidden_dim = args.hidden_dim if args.hidden_dim > 0 else 46
-        lnlr_s = args.lnlr_s if args.lnlr_s > 0 else 12
-        model = LNLR(branch_dim=2, trunk_dim=2, hidden_dim=lnlr_hidden_dim, num_outputs=4,
-                     trunk_depth=3, branch_depth=3, activation='GELU', s=lnlr_s,
-                     s_w_offset=args.lnlr_s_w_offset)
-    elif args.model == 'lnlr_base':
-        # Ablation of LNLR (model_LNLR_Base.py): adds a learnable, batch-shared
-        # full-rank base weight W_{0,l} to each conditional hidden layer, i.e.
-        # W_l(mu) = W_{0,l} + U_l diag(s_w_l(mu)) V_l^T, zero-initialized so
-        # the model starts identical to plain LNLR.
-        lnlr_base_hidden_dim = args.hidden_dim if args.hidden_dim > 0 else 46
-        model = LNLR_Base(branch_dim=2, trunk_dim=2, hidden_dim=lnlr_base_hidden_dim, num_outputs=4,
-                          trunk_depth=3, branch_depth=3, activation='GELU')
-    elif args.model == 'lnlr_udiags':
-        # Ablation of LNLR (model_LNLR_UdiagS.py): removes V_l and forces
-        # s = hidden_dim, so W_l(mu) = U_l diag(s_w_l(mu)) with a single
-        # fixed matrix U_l (no low-rank bottleneck, no bilinear U/V product).
-        lnlr_udiags_hidden_dim = args.hidden_dim if args.hidden_dim > 0 else 46
-        model = LNLR_UdiagS(branch_dim=2, trunk_dim=2, hidden_dim=lnlr_udiags_hidden_dim, num_outputs=4,
-                            trunk_depth=3, branch_depth=3, activation='GELU')
+        lrnr_hidden_dim = args.hidden_dim if args.hidden_dim > 0 else 46
+        lrnr_s = args.lrnr_s if args.lrnr_s > 0 else 12
+        model = LRNR(branch_dim=2, trunk_dim=2, hidden_dim=lrnr_hidden_dim, num_outputs=4,
+                     trunk_depth=3, branch_depth=3, activation='GELU', s=lrnr_s,
+                     s_w_offset=args.lrnr_s_w_offset)
+    elif args.model == 'coordinate_mlp':
+        # Plain concat-and-MLP baseline (model_coordinate_mlp.py): no
+        # hypernetwork, no branch-trunk inner product, no low-rank/FiLM/
+        # residual -- u_hat(x;mu) = f_theta([mu, x]).
+        coord_hidden_dim = args.hidden_dim if args.hidden_dim > 0 else 46
+        model = CoordinateMLP(branch_dim=2, trunk_dim=2, hidden_dim=coord_hidden_dim, num_outputs=4,
+                              trunk_depth=3, branch_depth=3, activation='GELU')
+    elif args.model == 'nomad':
+        # NOMAD baseline (model_nomad.py): Branch MLP -> latent vector beta(mu),
+        # Decoder MLP on [beta(mu), x]. No hypernetwork, no branch-trunk dot
+        # product -- Decoder weights are ordinary learned nn.Parameters.
+        nomad_hidden_dim = args.hidden_dim if args.hidden_dim > 0 else 46
+        nomad_latent_dim = args.nomad_latent_dim if args.nomad_latent_dim > 0 else 8
+        model = NOMAD(branch_dim=2, trunk_dim=2, hidden_dim=nomad_hidden_dim, num_outputs=4,
+                     trunk_depth=3, branch_depth=3, activation='GELU', latent_dim=nomad_latent_dim)
     elif args.model == 'pt':
         model = PointTransformer(in_dim=4, out_dim=4, embed_dim=144, depth=4)
     elif args.model == 'mscale_deeponet':
